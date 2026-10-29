@@ -5,8 +5,10 @@
 // manifest.yaml and instructions.md. A Registry install downloads only the
 // files its listing pins (manifest.yaml, cli.js, app.js, page.js), so the release manifest
 // also carries the guide as its `instructions`, which the host reads when no
-// instructions.md sits beside it.
+// instructions.md sits beside it, and its `built_with`, the eidosmd this build
+// compiled against (The Plugin Model REQ52).
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 
 mkdirSync('dist', { recursive: true });
@@ -49,4 +51,9 @@ const block = guide
   .split('\n')
   .map((line) => (line === '' ? '' : `  ${line}`))
   .join('\n');
-writeFileSync('dist/manifest.yaml', `${readFileSync('manifest.yaml', 'utf8').replace(/\s+$/, '')}\ninstructions: |\n${block}\n`);
+const builtWith = JSON.parse(readFileSync(createRequire(import.meta.url).resolve('eidosmd/package.json'), 'utf8')).version;
+const manifest = readFileSync('manifest.yaml', 'utf8')
+  .replace(/\s+$/, '')
+  .replace(/^built_with:.*\n/m, '')
+  .replace(/^(min_host:.*)$/m, `$1\nbuilt_with: ${builtWith}`);
+writeFileSync('dist/manifest.yaml', `${manifest}\ninstructions: |\n${block}\n`);
