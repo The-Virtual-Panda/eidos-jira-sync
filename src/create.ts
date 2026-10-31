@@ -6,6 +6,7 @@
 // one of its tasks is stopped. The task is marked before Jira is asked, and
 // the issue carries the mark as a property, so a create cut short is found
 // again, never made twice.
+import { settingsFor } from './boards.ts';
 import { randomUUID } from 'node:crypto';
 import type { AdfContext } from './adf.ts';
 import { JiraError } from './client.ts';
@@ -89,7 +90,7 @@ const asEditField = (field: JiraField): EditField => ({
 // Jira type that reads back as it. A type that would not read back as the task's own is refused, so the first sync
 // never changes the task's type.
 function typeOfTask(context: Context, description: Description, task: TaskView, asked: string | undefined, parentLinked: boolean): { type?: JiraType; blocker?: Blocker } {
-  const board = context.backlog.settings();
+  const board = settingsFor(context.backlog, context.connection);
   const mapping = context.connection.mapping;
   const back = description.types.filter((type) => same(typeFor(mapping, board, type.name) ?? '', task.type));
   const name = context.connection.name;
@@ -145,7 +146,7 @@ export async function prepareCreate(context: Context, task: TaskView, options: C
     return { plan, task, payload: null, pending };
   }
   const description = await described(context);
-  const board = backlog.settings();
+  const board = settingsFor(backlog, connection);
   const parentTask = task.parent ? backlog.tasks().find((other) => (other.id ?? other.name).toLowerCase() === task.parent!.toLowerCase()) : undefined;
   const parentHeld = parentTask ? heldOf(parentTask) : null;
   const parentComing = parentTask !== undefined && (options.batch?.has((parentTask.id ?? parentTask.name).toLowerCase()) ?? false);
@@ -325,7 +326,7 @@ async function findPending(context: Context, pending: Pending): Promise<{ id: st
 async function link(context: Context, task: TaskView, ref: { id: string; key: string }): Promise<Omit<Created, 'found'>> {
   const { backlog, connection } = context;
   const name = task.id ?? task.name;
-  const board = backlog.settings();
+  const board = settingsFor(backlog, connection);
   const whole = await context.client.get<Issue>(`/rest/api/3/issue/${ref.id}`, {
     fields: [...new Set(['summary', 'description', 'status', 'priority', 'assignee', 'parent', 'issuetype', 'updated', 'created', ...fieldsOf(connection, board).map((pair) => pair.jira)])].join(','),
   });

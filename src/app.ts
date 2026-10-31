@@ -6,7 +6,7 @@
 // file; no answer carries it back.
 import { HostError, type AppEntry, type AppHost } from 'eidosmd/plugin';
 import { fromBoardUrl } from './connections.ts';
-import type { JiraApi } from './index.ts';
+import type { BoardPick, JiraApi } from './index.ts';
 import type { MappingChoice } from './mapping.ts';
 import type { MappingPart } from './connections.ts';
 import type { SyncOptions } from './sync.ts';
@@ -36,7 +36,18 @@ function createOptions(value: unknown): CreateOptions {
   };
 }
 
-const SETTINGS = ['pull_attachments', 'attachments_folder', 'add_people', 'auto_fetch', 'auto_sync_on_save', 'auto_sync_on_push'] as const;
+const SETTINGS = ['pull_attachments', 'attachments_folder', 'add_people', 'own_board', 'board_folders', 'auto_fetch', 'auto_sync_on_save', 'auto_sync_on_push'] as const;
+
+// Where a connection's issues land, as the page sends it (Jira REQ25): a Backlog board by name, '' for none, or a board of its own,
+// with the board the backlog already is named when it has none.
+function boardPick(body: Record<string, unknown>): BoardPick {
+  const existing = typeof body['existing'] === 'object' && body['existing'] !== null ? (body['existing'] as Record<string, unknown>) : null;
+  return {
+    ...(typeof body['backlog_board'] === 'string' ? { backlog_board: text(body['backlog_board']) || null } : {}),
+    ...(body['own_board'] === true ? { own_board: true } : body['own_board'] === false ? { own_board: false } : {}),
+    ...(existing && text(existing['name']) ? { existing: { name: text(existing['name']), ...(text(existing['folder']) ? { folder: text(existing['folder']) } : {}) } } : {}),
+  };
+}
 
 // The options a sync is run with, as the page's review sends them: only what it can choose, each checked here.
 function syncOptions(value: unknown): SyncOptions {
@@ -79,6 +90,8 @@ function state(host: AppHost, api: JiraApi): Record<string, unknown> {
     needs: api.needs(),
     // the folders the Assets plugin manages, where downloaded attachments may go; null with the Assets plugin off
     asset_folders: api.assetFolders(),
+    // the Backlog's boards a connection may land on; null on a host from before boards
+    backlog_boards: api.backlogBoards(),
   };
 }
 
@@ -123,6 +136,7 @@ const entry: AppEntry<JiraApi> = {
           project,
           ...(board ? { board: String(board) } : {}),
           ...(text(request.body['jql']) ? { jql: text(request.body['jql']) } : {}),
+          ...boardPick(request.body),
         });
         return { connection: made, state: state(host, api) };
       }),
@@ -138,6 +152,12 @@ const entry: AppEntry<JiraApi> = {
     );
     host.route('GET', 'match-ask', (request) => answer(() => api.matchAsk(request.query.get('name') ?? '')));
     host.route('GET', 'boards', (request) => answer(() => api.boards(request.query.get('site') ?? undefined)));
+    host.route('POST', 'backlog-board', (request) =>
+      answer(async () => {
+        const done = await api.pickBoard(text(request.body['name']), boardPick(request.body), { move: request.body['move'] === true });
+        return { ...done, state: state(host, api) };
+      }),
+    );
     host.route('POST', 'resume', (request) =>
       answer(() => {
         api.resume(text(request.body['name']));

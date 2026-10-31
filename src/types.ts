@@ -27,6 +27,29 @@ export interface SectionDeclaration {
   type: 'text' | 'checklist' | 'links';
 }
 
+// A Backlog board (Backlog Boards, from the Eidos MD release after 0.18.0): one context of the backlog using a subset of the root's
+// statuses, types, and properties (every one where a subset is null), with its own columns or the root's narrowed to its statuses.
+export interface Board {
+  name: string;
+  title: string;
+  folder: string | null;
+  statuses: string[] | null;
+  types: string[] | null;
+  properties: string[] | null;
+  columns: Array<{ name: string; statuses: string[] }> | null;
+  default_status: string | null;
+}
+export interface BoardChanges {
+  name?: string;
+  title?: string;
+  folder?: string | null;
+  statuses?: string[] | null;
+  types?: string[] | null;
+  properties?: string[] | null;
+  columns?: Array<{ name: string; statuses: string[] }> | null;
+  default_status?: string | null;
+}
+
 export interface BoardSettings {
   statuses: string[];
   columns: Array<{ name: string; statuses: string[] }>;
@@ -38,6 +61,8 @@ export interface BoardSettings {
   types: Array<{ name: string; title: string; sections: SectionDeclaration[]; prefix: string | null }>;
   status_categories: Record<string, StatusCategory>;
   link_types: Array<{ name: string; outward: string; inward: string }>;
+  // absent on a host from before boards
+  boards?: Board[];
 }
 
 export interface TaskView {
@@ -46,6 +71,8 @@ export interface TaskView {
   file: string;
   title: string;
   type: string;
+  // the Backlog board it is on; absent on a host from before boards, null in a root with none
+  board?: string | null;
   status: string | null;
   assignee: string[];
   milestone: string | null;
@@ -60,6 +87,7 @@ export interface TaskView {
 export interface TaskFields {
   title?: string;
   type?: string;
+  board?: string;
   status?: string | null;
   assignee?: string[];
   milestone?: string | null;
@@ -87,6 +115,12 @@ export interface BacklogApi {
   // the statuses, priorities, and types reshaped in one change (Backlog REQ20, from the Eidos MD release after 0.16.1)
   reshape?(change: Reshape, options?: { dryRun?: boolean }): Promise<ReshapeResult>;
   addProperty(declaration: { name: string; type: string; options?: string[]; applies_to?: string[]; meaning?: string }): Promise<BoardSettings>;
+  // boards (from the Eidos MD release after 0.18.0): a board added, the first add naming the board the backlog already is; one changed
+  addBoard?(
+    board: BoardChanges & { name: string },
+    options?: { existing?: { name: string; title?: string; folder?: string | null }; dryRun?: boolean },
+  ): Promise<{ board: Board; existing: Board | null }>;
+  setBoard?(name: string, changes: BoardChanges, options?: { dryRun?: boolean }): Promise<{ board: Board }>;
 }
 
 export interface Author {

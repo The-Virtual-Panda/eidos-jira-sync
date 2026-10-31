@@ -12,6 +12,7 @@
 //        └──── journal ◄── task (from Jira) ◄─────────┘
 //                 │
 //                 └─► guard ─► Jira (fields, transitions, comments) ─► read back ─► settle bases
+import { settingsFor } from './boards.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -598,7 +599,7 @@ export async function prepare(context: Context, task: TaskView, options: SyncOpt
   if (!held) throw new SyncRefused(`${task.id ?? task.name} holds no Jira issue; eidos jira create makes one from it`);
   if (siteKey(held.site) !== siteKey(connection.site)) throw new SyncRefused(`${task.id ?? task.name} holds an issue on ${held.site}, not ${connection.name}'s site`);
   if (held.pending) throw new SyncRefused(`${task.id ?? task.name} is waiting on a create that did not finish; eidos jira create ${task.id ?? task.name} finds its issue`);
-  const board = backlog.settings();
+  const board = settingsFor(backlog, connection);
   const pairs = fieldsOf(connection, board);
   const fetched = await readIssue(context, held.id, pairs);
   const read: Read = { issue: fetched, whole: fetched, type: null };
@@ -856,7 +857,7 @@ export async function apply(context: Context, prepared: Prepared): Promise<SyncD
 
   // 1. what Jira changed, into the task; those bases and the ones already level settled now, a pushed side's left as they were
   const pairs = prepared.pairs;
-  const board = backlog.settings();
+  const board = settingsFor(backlog, context.connection);
   const seen = (issue: Issue): Issue => splitIssue(issue, prepared.bundles, board).issue;
   const digest = { ...(held.digest ?? {}) };
   const remote = { ...(held.remote ?? {}) };
@@ -1029,7 +1030,7 @@ export async function sendComment(context: Context, task: TaskView, text: string
 // The tasks of a connection edited in the root since their last pull or sync, read from the tasks alone (no request to
 // Jira): what `eidos jira status` lists and `sync --connection` walks.
 export function editedHere(context: Pick<Context, 'backlog' | 'connection'>): Array<{ task: string; key: string; sides: string[] }> {
-  const board = context.backlog.settings();
+  const board = settingsFor(context.backlog, context.connection);
   const pairs = fieldsOf(context.connection, board);
   const site = siteKey(context.connection.site);
   const out: Array<{ task: string; key: string; sides: string[] }> = [];

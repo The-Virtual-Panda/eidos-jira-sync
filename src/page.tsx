@@ -60,6 +60,8 @@ interface ConnectionRow {
   site: string;
   project: string;
   board?: number;
+  // the Backlog board its issues land on (Jira REQ25); absent, the backlog's first board
+  backlog_board?: string;
   mapping: Record<string, Pair[] | string | undefined>;
   problems: Array<{ code: string; message: string }>;
   status: { last_pull: string | null; last_fetch: { at: string; count: number; error?: string } | null } | null;
@@ -95,10 +97,21 @@ interface State {
   sign_ins: SignInRow[];
   held: HeldRow[];
   connections: ConnectionRow[];
-  settings: { pull_attachments: boolean; attachments_folder: string; add_people: boolean; auto_fetch: string; auto_sync_on_save: boolean; auto_sync_on_push: boolean };
+  settings: {
+    pull_attachments: boolean;
+    attachments_folder: string;
+    add_people: boolean;
+    own_board: boolean;
+    board_folders: boolean;
+    auto_fetch: string;
+    auto_sync_on_save: boolean;
+    auto_sync_on_push: boolean;
+  };
   // the tasks an auto sync stopped on, waiting for the person (Jira Sync REQ20)
   needs: Array<{ task: string; key: string; reason: string; at: string }>;
   asset_folders: string[] | null;
+  // the Backlog's boards a connection may land on; null on an Eidos MD from before boards
+  backlog_boards: Array<{ name: string; title: string; tasks: number }> | null;
 }
 interface EditorField {
   id: string;
@@ -1413,6 +1426,9 @@ function Account(props: { state: State; busy: string | null; act: Act; take: (an
   );
 }
 
+// the Backlog board picker's choice for a board made for the connection
+const OWN_BOARD = '\u0000own';
+
 function Boards(props: { state: State; busy: string | null; act: Act; take: (answer: { state: State }) => void; onMap: (name: string) => void }): JSX.Element {
   const host = usePluginHost();
   const { t } = host;
@@ -1441,16 +1457,54 @@ function Boards(props: { state: State; busy: string | null; act: Act; take: (ans
     if (!(await host.dialog.confirm(t('removeAsk', { name: shown }), { title: t('removeTitle'), ok: t('remove'), danger: true }))) return;
     await props.act(`remove:${name}`, () => host.post<{ state: State }>('disconnect', { name }), props.take);
   };
+  const backlogBoards = props.state.backlog_boards;
+  // a board of its own on a backlog with none names the board the backlog already is first, so the new board starts empty (Jira REQ25)
+  const existingName = async (title: string): Promise<{ name: string } | null | undefined> => {
+    if (backlogBoards === null || backlogBoards.length > 0) return undefined;
+    const name = await host.dialog.prompt(t('existingBoardAsk', { title }), { title: t('existingBoardTitle'), ok: t('existingBoardOk') });
+    return name && name.trim() ? { name: name.trim() } : null;
+  };
   const connect = (body: Record<string, unknown>, done: () => void): void =>
-    void props.act(
-      'connect',
-      () => host.post<{ connection: { name: string }; state: State }>('connect', body),
-      (answer) => {
-        props.take(answer);
-        done();
-        props.onMap(answer.connection.name);
-      },
-    );
+    void (async () => {
+      const own = backlogBoards !== null && props.state.settings.own_board;
+      const existing = own ? await existingName(String(body['title'] ?? body['project'] ?? '')) : undefined;
+      if (existing === null) return;
+      await props.act(
+        'connect',
+        () => host.post<{ connection: { name: string }; state: State }>('connect', { ...body, ...(existing ? { existing } : {}) }),
+        (answer) => {
+          props.take(answer);
+          done();
+          props.onMap(answer.connection.name);
+        },
+      );
+    })();
+  // the Backlog board a connection lands on: one the Backlog declares, a board of its own, or the first; the tasks it pulled move on asking
+  const pickBoard = (connection: ConnectionRow, value: string): void =>
+    void (async () => {
+      const own = value === OWN_BOARD;
+      const existing = own ? await existingName(boardName(connection)) : undefined;
+      if (existing === null) return;
+      const where = own ? t('ownBoardShort') : (backlogBoards?.find((board) => board.name === value)?.title ?? t('firstBoard'));
+      // the tasks it pulled already move only when the person says so
+      const pulledBefore = (connection.status?.last_pull ?? null) !== null;
+      const move =
+        pulledBefore && (own || value !== '') && (await host.dialog.confirm(t('moveTasksAsk', { name: boardName(connection), board: where }), { title: t('moveTasksTitle'), ok: t('moveTasksOk') }));
+      await props.act(
+        `board:${connection.name}`,
+        () =>
+          host.post<{ state: State; moved: string[]; left: string[] }>('backlog-board', {
+            name: connection.name,
+            ...(own ? { own_board: true } : { backlog_board: value }),
+            ...(existing ? { existing } : {}),
+            move,
+          }),
+        (answer) => {
+          props.take(answer);
+          if (answer.left.length > 0) host.toast(t('movedSome', { n: answer.moved.length, left: answer.left.length }), 'info', t('movedSomeHint', { name: connection.name }));
+        },
+      );
+    })();
   let picker: JSX.Element | null = null;
   if (signedIn) {
     if (boardsError) picker = <Text tone="error" size="sm">{t('boardsFailed', { error: boardsError })}</Text>;
@@ -1496,6 +1550,24 @@ function Boards(props: { state: State; busy: string | null; act: Act; take: (ans
                 .join(' · ')}
               control={
                 <Row>
+                  {backlogBoards !== null && (
+                    <Select
+                      aria-label={t('backlogBoardOf', { name: boardName(connection) })}
+                      value={connection.backlog_board ?? ''}
+                      disabled={props.busy !== null}
+                      onChange={(event: { target: HTMLSelectElement }) => pickBoard(connection, event.target.value)}
+                      data-testid={`jira-backlog-board-${connection.name}`}
+                    >
+                      <option value="">{t(backlogBoards.length === 0 ? 'wholeBacklog' : 'firstBoard')}</option>
+                      {connection.backlog_board && !backlogBoards.some((board) => board.name === connection.backlog_board) && <option value={connection.backlog_board}>{t('boardGone', { board: connection.backlog_board })}</option>}
+                      {backlogBoards.map((board) => (
+                        <option key={board.name} value={board.name}>
+                          {board.title}
+                        </option>
+                      ))}
+                      <option value={OWN_BOARD}>{t('ownBoard')}</option>
+                    </Select>
+                  )}
                   <Button onClick={() => props.onMap(connection.name)}>{t('editMapping')}</Button>
                   <Button variant="quiet" disabled={props.busy !== null} onClick={() => void remove(connection.name, boardName(connection))}>
                     {t('remove')}
@@ -1698,6 +1770,8 @@ interface MatchList {
 }
 interface MatchPlan {
   mode: 'add' | 'replace';
+  // the Backlog board matched, when the connection pulls onto one (Jira REQ25)
+  board?: string;
   statuses: MatchList;
   priorities: MatchList;
   types: MatchList;
@@ -1787,6 +1861,11 @@ function MatchReview(props: { name: string; board: string; onClose: () => void; 
   else
     body = (
       <Stack gap="md">
+        {plan.board && (
+          <Text size="sm" tone="muted" block data-testid="jira-match-board">
+            {t('matchBoardNote', { board: plan.board })}
+          </Text>
+        )}
         {plan.moved.length > 0 && (
           <Notice tone="error" data-testid="jira-match-warning">
             <Stack gap="xs">
@@ -2203,6 +2282,24 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
           hint={t('addPeopleHint')}
           control={<Switch checked={settings.add_people} aria-label={t('addPeople')} onChange={(event: { currentTarget: HTMLInputElement }) => write('add_people', event.currentTarget.checked)} />}
         />
+        {props.state.backlog_boards !== null && (
+          <SettingRow
+            label={t('ownBoardSetting')}
+            hint={t('ownBoardSettingHint')}
+            control={
+              <Switch checked={settings.own_board} aria-label={t('ownBoardSetting')} data-testid="jira-own-board" onChange={(event: { currentTarget: HTMLInputElement }) => write('own_board', event.currentTarget.checked)} />
+            }
+          />
+        )}
+        {props.state.backlog_boards !== null && (
+          <SettingRow
+            label={t('boardFolders')}
+            hint={t('boardFoldersHint')}
+            control={
+              <Switch checked={settings.board_folders} aria-label={t('boardFolders')} data-testid="jira-board-folders" onChange={(event: { currentTarget: HTMLInputElement }) => write('board_folders', event.currentTarget.checked)} />
+            }
+          />
+        )}
         <SettingRow
           label={t('autoFetch')}
           hint={t('autoFetchHint')}
@@ -2262,7 +2359,7 @@ export const page: PagePlugin = {
   ],
   pages: [{ path: 'mapping', render: (route: { segments: string[] }) => <MappingPage key={route.segments[0] ?? ''} name={decodeURIComponent(route.segments[0] ?? '')} /> }],
   settings: () => <JiraSettings />,
-  settingsDrawn: ['connections', 'accounts', 'pull_attachments', 'attachments_folder', 'add_people', 'auto_fetch', 'auto_sync_on_save', 'auto_sync_on_push'],
+  settingsDrawn: ['connections', 'accounts', 'pull_attachments', 'attachments_folder', 'add_people', 'own_board', 'board_folders', 'auto_fetch', 'auto_sync_on_save', 'auto_sync_on_push'],
   // wherever the person is, an auto sync that stops on something says so once (Jira Sync REQ20)
   useListen: () => {
     const host = usePluginHost();

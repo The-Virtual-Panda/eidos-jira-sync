@@ -28,6 +28,16 @@ settings:
     scope: root
     default: false
     meaning: add each person a pull finds whom the root does not have (an assignee, a comment's author, a person mentioned) to the root's users; off, they keep the name Jira gives them
+  - name: own_board
+    type: checkbox
+    scope: root
+    default: false
+    meaning: a connection made from now on pulls onto a Backlog board of its own, named for its Jira board, keeping its workflow instead of mapping it onto another board's; off, it pulls onto the backlog's first board
+  - name: board_folders
+    type: checkbox
+    scope: root
+    default: false
+    meaning: a Backlog board made for a connection keeps its tasks in a folder of its own under the backlog's, named for the board
   - name: accounts
     type: structured
     scope: me

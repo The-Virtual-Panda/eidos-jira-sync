@@ -52,6 +52,8 @@ export interface Connection {
   jql?: string;
   direction: 'pull' | 'push';
   restricted_comments?: boolean;
+  // the Backlog board its issues land on, by the board's name (Jira REQ25); absent, the backlog's first board, as before boards
+  backlog_board?: string;
   mapping: Mapping;
 }
 
@@ -112,6 +114,7 @@ export function readConnection(value: unknown): Connection | null {
   const board = Number(value['board']);
   const jql = text(value['jql']);
   const title = text(value['title']);
+  const backlogBoard = text(value['backlog_board']);
   return {
     name,
     ...(title ? { title } : {}),
@@ -121,6 +124,7 @@ export function readConnection(value: unknown): Connection | null {
     ...(jql ? { jql } : {}),
     direction: value['direction'] === 'push' ? 'push' : 'pull',
     ...(value['restricted_comments'] === true ? { restricted_comments: true } : {}),
+    ...(backlogBoard ? { backlog_board: backlogBoard } : {}),
     mapping,
   };
 }

@@ -373,3 +373,63 @@ test('Jira REQ24: match shows the change first, and Replace makes the Backlog th
   assert.deepEqual(again.statuses.after, plan.statuses.after);
   assert.deepEqual([again.statuses.added, again.statuses.removed, again.statuses.renamed, again.moved], [[], [], {}, []], 'matched, nothing is left to change');
 });
+
+test('Jira REQ25: a connection gets a Backlog board of its own, the backlog it was naming its first; its tasks move there, a pull lands there, and a match narrows that board alone', async (t) => {
+  const boards = JSON.parse(await ok(['backlog', 'boards', '--json'])) as { boards?: unknown[] };
+  if (!Array.isArray(boards.boards)) return t.skip('this Eidos MD has no boards');
+  await ok(['jira', 'login', fake.url], `${EMAIL}\n${TOKEN}\n`);
+  const pulled = (JSON.parse(await ok(['backlog', '--json'])) as { tasks: Array<{ id: string; board: string | null; properties: Record<string, unknown> }> }).tasks.filter(
+    (task) => task.properties['jira'],
+  );
+  assert.ok(pulled.length > 0, 'the earlier pulls left tasks');
+
+  // no board yet: the backlog is one, so a board of its own asks what to call that one
+  const unnamed = await eidos(['jira', 'configure:connection', 'set', 'acme', '--own-board']);
+  assert.notEqual(unnamed.status, 0);
+  assert.match(unnamed.stderr, /the Backlog is one board now, holding every task; name that board/);
+  assert.match((await eidos(['jira', 'configure:connection', 'set', 'acme', '--backlog-board', 'nope'])).stderr, /declares no board nope/);
+  const picked = await ok(['jira', 'configure:connection', 'set', 'acme', '--own-board', '--existing', 'product', '--move-tasks']);
+  assert.match(picked, /pulls onto the Backlog board acme-board/);
+  assert.match(picked, new RegExp(`${pulled.length} tasks? it pulled moved there`));
+  const settings = readFileSync(path.join(root, '.eidos', 'plugins', 'jira', 'settings.yaml'), 'utf8');
+  assert.match(settings, /backlog_board: acme-board/);
+  const listed = JSON.parse(await ok(['backlog', 'boards', '--json'])) as { boards: Array<{ name: string; title: string }> };
+  assert.deepEqual(
+    listed.boards.map((board) => [board.name, board.title]),
+    [
+      ['product', 'product'],
+      ['acme-board', 'ACME board'],
+    ],
+  );
+  const onBoard = JSON.parse(await ok(['backlog', '--board', 'acme-board', '--json'])) as { tasks: Array<{ id: string }> };
+  assert.deepEqual(onBoard.tasks.map((task) => task.id).sort(), pulled.map((task) => task.id).sort());
+
+  // an issue changed in Jira since lands on the board it already is on, and a new one is made there
+  touch(fake.state, 'ACME-2', { summary: 'Ship the login page, on its own board' }, jiraNow());
+  await ok(['jira', 'pull', 'acme']);
+  const after = JSON.parse(await ok(['backlog', '--json'])) as { tasks: Array<{ board: string | null; properties: Record<string, unknown> }> };
+  assert.ok(after.tasks.filter((task) => task.properties['jira']).every((task) => task.board === 'acme-board'));
+
+  // a status Jira lacks stays the project's and the other board's; Replace takes it off the connection's board alone
+  await ok(['backlog', 'configure:status', 'add', 'Parked', '--category', 'todo']);
+  const plan = JSON.parse(await ok(['jira', 'match', 'acme', '--replace', '--dry-run', '--json'])) as { board: string; statuses: { after: string[] } };
+  assert.equal(plan.board, 'acme-board');
+  assert.ok(!plan.statuses.after.includes('Parked'));
+  assert.match(await ok(['jira', 'match', 'acme', '--replace', '--dry-run']), /The Backlog board acme-board: Jira's values are added to the project's/);
+  await ok(['jira', 'match', 'acme', '--replace', '--yes']);
+  const backlogSettings = readFileSync(path.join(root, '.eidos', 'plugins', 'backlog', 'settings.yaml'), 'utf8');
+  const project = JSON.parse(await ok(['backlog', 'boards', '--json'])) as { boards: Array<{ name: string; statuses: string[] | null; columns: unknown[] | null }> };
+  const acme = project.boards.find((board) => board.name === 'acme-board')!;
+  assert.deepEqual(acme.statuses, plan.statuses.after, "the board uses Jira's statuses alone");
+  assert.ok(acme.columns && acme.columns.length > 0, "and Jira's columns");
+  assert.equal(project.boards.find((board) => board.name === 'product')!.statuses, null, 'the other board still uses every status');
+  assert.match(backlogSettings, /- Parked/, 'the project keeps the status another board uses');
+  const check = await eidos(['check']);
+  assert.doesNotMatch(check.stdout + check.stderr, /backlog\/board-mismatch/);
+
+  // own_board on: a connection made from now on gets a board of its own, numbered past the name taken
+  await ok(['plugin', 'set', 'jira', 'own_board', 'true']);
+  await ok(['jira', 'connect', 'acme-again', '--site', fake.url, '--key', 'ACME', '--board', '1']);
+  assert.match(readFileSync(path.join(root, '.eidos', 'plugins', 'jira', 'settings.yaml'), 'utf8'), /backlog_board: acme-board-2/);
+  await ok(['jira', 'disconnect', 'acme-again']);
+});

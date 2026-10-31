@@ -83,6 +83,17 @@ eidos jira match acme --replace
 
 Needs the Eidos MD release after 0.16.1.
 
+## A board of its own
+
+With several Jira boards, give each its own board in the Backlog, so each keeps its own workflow instead of being mapped onto one. On the settings page, pick a connection's **Backlog board**: one your Backlog has, or **A board of its own**, named after the Jira board. If your Backlog has no boards yet, you're asked what to call the board you have now, which keeps every task already there; the new board starts empty, and you can move the tasks the connection already pulled onto it. From then on a pull lands its issues there, and **Match the Backlog to Jira** changes that board alone: Jira's statuses and types are added to the project's, the board uses exactly Jira's workflow and columns, and no other board changes. Turn on `own_board` to give every board you connect from now on a board of its own.
+
+```bash
+eidos jira configure:connection set acme --own-board --existing product --move-tasks
+eidos jira match acme --replace
+```
+
+Needs the Eidos MD release after 0.18.0, whose Backlog holds boards.
+
 ## Several sections in one field
 
 On the mapping page, under **Fields**, a rich-text field mapped to a section (the description) has **Add a section**: add Acceptance Criteria and Jira holds both as one text, the description, then `## Acceptance Criteria` with each criterion a checkbox. From the terminal:
@@ -118,6 +129,8 @@ Both run only while the app has the root open, only for tasks edited here, never
 | `pull_attachments`  | shared with the root | Download each issue's attachments through the Assets plugin instead of linking to Jira.         |
 | `attachments_folder` | shared with the root | The asset folder downloads go to; empty, the Assets plugin's first folder.                     |
 | `add_people`        | shared with the root | Add each person a pull finds that the root doesn't have to its users.                           |
+| `own_board`         | shared with the root | Give every board you connect from now on a Backlog board of its own, named after it.            |
+| `board_folders`     | shared with the root | Keep the tasks of a board made for a connection in a folder of their own.                       |
 | `auto_fetch`        | yours                | Fetch every 5, 15, 30, or 60 minutes while the app has the root open. Nothing pulls on its own. |
 | `auto_sync_on_save` | yours                | Sync a task edited here a few seconds after its last save.                                      |
 | `auto_sync_on_push` | yours                | Sync every task edited here once the app pushes.                                                |

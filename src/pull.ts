@@ -5,6 +5,7 @@
 // Each issue's task holds its issue under its `jira` key, with what the pull
 // wrote as a digest per field, so an edit made in the root is told from a
 // change in Jira on any machine. Only the last pull's time is per machine.
+import { boardOf, settingsFor } from './boards.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -412,7 +413,13 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const { host, backlog, client, connection } = context;
   const now = options.now ?? new Date();
   const state = readState(host.workspace, connection.name);
-  const board = backlog.settings();
+  // the board the connection pulls onto (Jira REQ25), refused when the Backlog no longer declares it, so no issue lands elsewhere
+  const onto = boardOf(backlog.settings(), connection);
+  if (connection.backlog_board && !onto)
+    throw new Error(
+      `${connection.name} pulls onto the Backlog board ${connection.backlog_board}, which the Backlog no longer declares; pick its board again on Jira Sync's settings or with eidos jira configure:connection`,
+    );
+  const board = settingsFor(backlog, connection);
   const pairs = fieldsOf(connection, board);
   const scope = await scopeJql(client, connection);
   const since = options.full || !state.last_pull ? null : new Date(new Date(state.last_pull).getTime() - OVERLAP_MINUTES * 60_000);
@@ -647,7 +654,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
     let written: TaskView;
     if (!task) {
       const created = moment(issue.fields.created);
-      const make = { ...fields, title: fields.title ?? issue.key, ...dates, ...(created ? { created } : {}), tool: { jira } };
+      const make = { ...fields, title: fields.title ?? issue.key, ...(onto ? { board: onto.name } : {}), ...dates, ...(created ? { created } : {}), tool: { jira } };
       if (make.parent) written = backlog.create(make);
       else {
         try {

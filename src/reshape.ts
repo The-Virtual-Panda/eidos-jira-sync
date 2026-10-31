@@ -235,3 +235,49 @@ export function matchChange(description: Description, board: BoardSettings, mapp
     },
   };
 }
+
+// Matching one board of the Backlog to a Jira board (Jira REQ25): the board's own lists become Jira's, worked out from the board's
+// view as matchChange works out the whole Backlog's, but nothing another board uses is renamed or removed. A Jira value the root
+// lacks is added to the root's pool, the board uses exactly the values it ends with (and Jira's columns, or its own with Jira's
+// added), and a value the board leaves is taken off it alone: its tasks there move to the value it was renamed to or moves to, the
+// root keeping it for the boards that still use it. Priorities are every board's, so they are only added.
+export interface BoardMatch extends MatchChange {
+  // the root's lists, each widened by what Jira holds that it lacks; nothing renamed or removed
+  pool: Reshape;
+  // the board as it is to be
+  board: { statuses: string[]; types: string[]; columns: Array<{ name: string; statuses: string[] }>; default_status: string };
+  // the board's own values its tasks leave, by field: the value each goes to
+  moves: { status: Record<string, string>; type: Record<string, string> };
+}
+
+export function matchBoardChange(description: Description, root: BoardSettings, view: BoardSettings, mapping: Mapping, mode: MatchMode): BoardMatch {
+  const matched = matchChange(description, view, mapping, mode);
+  const statusAfter = matched.statuses.after;
+  const typeAfter = matched.change.types?.list ?? [];
+  // a value the root lacks joins the pool after the root's own, in the order Jira holds them
+  const categoryOf = new Map((matched.change.statuses?.list ?? []).map((entry) => [entry.name, entry.category]));
+  const poolStatuses = [...root.statuses, ...statusAfter.filter((name) => !root.statuses.includes(name))];
+  const poolTypes = [...root.types.map((type) => ({ name: type.name, title: type.title })), ...typeAfter.filter((entry) => !root.types.some((type) => type.name === entry.name))];
+  const poolPriorities = [...root.priorities, ...description.priorities.filter((name) => !root.priorities.some((held) => same(held, name)))];
+  const pool: Reshape = {
+    statuses: { list: poolStatuses.map((name) => ({ name, category: root.status_categories[name] ?? categoryOf.get(name) ?? backlogCategory(root, name) })) },
+    priorities: { list: poolPriorities },
+    types: { list: poolTypes },
+  };
+  // where the board's tasks go: a renamed value to its new name, a removed one to where matchChange moves its tasks
+  const status: Record<string, string> = { ...(matched.change.statuses?.renamed ?? {}) };
+  for (const [from, to] of Object.entries(matched.change.statuses?.moved ?? {})) status[from] = to;
+  const type: Record<string, string> = { ...(matched.change.types?.renamed ?? {}) };
+  for (const [from, to] of Object.entries(matched.change.types?.moved ?? {})) type[from] = to;
+  return {
+    ...matched,
+    pool,
+    board: {
+      statuses: statusAfter,
+      types: typeAfter.map((entry) => entry.name),
+      columns: matched.change.statuses?.columns ?? [],
+      default_status: matched.change.statuses?.default ?? statusAfter[0] ?? root.default_status,
+    },
+    moves: { status, type },
+  };
+}
