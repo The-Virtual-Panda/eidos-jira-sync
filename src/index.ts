@@ -67,7 +67,9 @@ export interface JiraApi {
   // the Backlog's boards a connection may land on, with how many tasks each holds; null on a host from before boards
   backlogBoards(): Array<{ name: string; title: string; tasks: number }> | null;
   resume(name: string): boolean;
-  connect(input: { name: string; title?: string; site: string; project: string; board?: string | number; jql?: string; direction?: 'pull' | 'push'; restricted_comments?: boolean } & BoardPick): Promise<Connection>;
+  connect(
+    input: { name: string; title?: string; site: string; project: string; board?: string | number; jql?: string; direction?: 'pull' | 'push'; restricted_comments?: boolean } & BoardPick,
+  ): Promise<Connection>;
   // The Backlog board a connection pulls onto (Jira REQ25): one the Backlog declares, a board of its own made for it, or none (the
   // backlog's first board, as before boards); `move` carries the tasks it already pulled there. The connection, and the tasks that
   // moved and those that could not (a status or a type the board does not use)
@@ -370,7 +372,8 @@ const entry: CliEntry = {
       if (!backlog.reshape) throw new Error('matching the Backlog to Jira needs a later Eidos MD, whose Backlog can be reshaped by a plugin');
       const root = backlog.settings();
       const onto = boardOf(root, connection);
-      if (connection.backlog_board && !onto) throw new Error(`${connection.name} pulls onto the Backlog board ${connection.backlog_board}, which the Backlog no longer declares; pick its board again first`);
+      if (connection.backlog_board && !onto)
+        throw new Error(`${connection.name} pulls onto the Backlog board ${connection.backlog_board}, which the Backlog no longer declares; pick its board again first`);
       // a connection with a board of its own matches that board alone, leaving every other board as it is
       if (onto) return { backlog, connection, onto, matched: matchBoardChange(read, root, settingsFor(backlog, connection), connection.mapping, mode) };
       return { backlog, connection, onto: null, matched: matchChange(read, root, connection.mapping, mode) };
@@ -409,7 +412,10 @@ const entry: CliEntry = {
       if (pick.backlog_board === null || pick.backlog_board.trim() === '') return null;
       const backlog = backlogOf(host);
       const found = boardOf(backlog.settings(), { ...connection, backlog_board: pick.backlog_board });
-      if (!found) throw new Error(`the Backlog declares no board ${pick.backlog_board}${(backlog.settings().boards ?? []).length > 0 ? ` (${(backlog.settings().boards ?? []).map((board) => board.name).join(', ')})` : ''}`);
+      if (!found)
+        throw new Error(
+          `the Backlog declares no board ${pick.backlog_board}${(backlog.settings().boards ?? []).length > 0 ? ` (${(backlog.settings().boards ?? []).map((board) => board.name).join(', ')})` : ''}`,
+        );
       return found.name;
     };
 
@@ -460,7 +466,7 @@ const entry: CliEntry = {
         const out: BoardRow[] = [];
         for (const each of sites) {
           const client = jiraClient(each, credentials(host, each), siteKey(each));
-          for (let startAt = 0; ; ) {
+          for (let startAt = 0; ;) {
             const page = await client.get<{ values?: Array<{ id: number; name: string; type?: string; location?: { projectKey?: string; projectName?: string } }>; isLast?: boolean }>(
               '/rest/agile/1.0/board',
               { startAt, maxResults: 50 },
@@ -551,11 +557,19 @@ const entry: CliEntry = {
             `The Backlog's priorities: ${board.priorities.join(', ')}.`,
             `The Backlog's task types: ${board.types.map((type) => `${type.title} (${type.name})`).join(', ')}.`,
             '',
-            "Read `eidos instructions backlog` and `eidos jira map " + connection.name + " --help` first. Say which values you would add, rename, or remove, and where the tasks holding a removed value go, and how many tasks that touches (`eidos backlog --json`). Make each change with `eidos backlog configure:status`, `configure:priority`, `configure:column`, and `configure:type`, each run with `--dry-run` first, and change nothing I have not accepted. Then pair each Jira value with its Backlog value in the mapping with `eidos jira configure:map " + connection.name + "`.",
+            'Read `eidos instructions backlog` and `eidos jira map ' +
+              connection.name +
+              ' --help` first. Say which values you would add, rename, or remove, and where the tasks holding a removed value go, and how many tasks that touches (`eidos backlog --json`). Make each change with `eidos backlog configure:status`, `configure:priority`, `configure:column`, and `configure:type`, each run with `--dry-run` first, and change nothing I have not accepted. Then pair each Jira value with its Backlog value in the mapping with `eidos jira configure:map ' +
+              connection.name +
+              '`.',
           ].join('\n'),
         };
       },
-      assetFolders: () => host.plugin<AssetsApi>('assets')?.folders().map((folder) => folder.name) ?? null,
+      assetFolders: () =>
+        host
+          .plugin<AssetsApi>('assets')
+          ?.folders()
+          .map((folder) => folder.name) ?? null,
       backlogBoards: () => {
         const backlog = host.plugin<BacklogApi>('backlog');
         if (!backlog || !boardsSupported(backlog)) return null;
@@ -581,9 +595,14 @@ const entry: CliEntry = {
         if (all.some((held) => held.name.toLowerCase() === made.name.toLowerCase())) throw new Error(`a connection called ${made.name} is already here`);
         // a board of its own when asked, or by default with own_board on (Jira REQ25), made once the connection is sure to be added
         const own = input.own_board ?? (input.backlog_board === undefined && host.settings().get<boolean>('own_board') === true);
-        const pick: BoardPick = { ...(input.backlog_board !== undefined ? { backlog_board: input.backlog_board } : {}), ...(own ? { own_board: true } : {}), ...(input.existing ? { existing: input.existing } : {}) };
+        const pick: BoardPick = {
+          ...(input.backlog_board !== undefined ? { backlog_board: input.backlog_board } : {}),
+          ...(own ? { own_board: true } : {}),
+          ...(input.existing ? { existing: input.existing } : {}),
+        };
         const opposedTo = opposed([...all, made], made);
-        if (opposedTo) throw new Error(`${made.name} would ${made.direction} the issues ${opposedTo.name} already ${opposedTo.direction}s (${opposedTo.project}); a root never pulls and pushes the same issues`);
+        if (opposedTo)
+          throw new Error(`${made.name} would ${made.direction} the issues ${opposedTo.name} already ${opposedTo.direction}s (${opposedTo.project}); a root never pulls and pushes the same issues`);
         const onto = await boardForPick(made, pick);
         if (onto) made.backlog_board = onto;
         await writeConnections(host, [...all, made]);
@@ -956,25 +975,42 @@ const entry: CliEntry = {
         .option('--existing-folder <folder>', 'a folder for it, its tasks moved there')
         .description('add a connection to this root, shared with everyone in it')
         .action(
-          action(async (name: string, options: { site: string; key: string; board?: string; title?: string; jql?: string; direction: string; restrictedComments?: boolean; backlogBoard?: string; ownBoard?: boolean; existing?: string; existingFolder?: string }) => {
-            if (options.direction !== 'pull' && options.direction !== 'push') throw new Error('a direction is pull or push');
-            const made = await api.connect({
-              direction: options.direction,
-              name,
-              site: options.site,
-              project: options.key,
-              ...(options.title ? { title: options.title } : {}),
-              ...(options.board ? { board: options.board } : {}),
-              ...(options.jql ? { jql: options.jql } : {}),
-              restricted_comments: options.restrictedComments === true,
-              ...(options.backlogBoard !== undefined ? { backlog_board: options.backlogBoard } : {}),
-              ...(options.ownBoard !== undefined ? { own_board: options.ownBoard } : {}),
-              ...(options.existing ? { existing: { name: options.existing, ...(options.existingFolder ? { folder: options.existingFolder } : {}) } } : {}),
-            });
-            print(
-              `Added ${made.name} (${made.title ?? made.project}): ${made.direction} ${made.project} on ${siteKey(made.site)}${made.board ? `, board ${made.board}` : ''}${made.backlog_board ? `, onto the Backlog board ${made.backlog_board}` : ''}. Next: eidos jira describe ${made.name}, then eidos jira map ${made.name}${made.backlog_board ? `, and eidos jira match ${made.name} to give the board Jira's workflow` : ''}.`,
-            );
-          }),
+          action(
+            async (
+              name: string,
+              options: {
+                site: string;
+                key: string;
+                board?: string;
+                title?: string;
+                jql?: string;
+                direction: string;
+                restrictedComments?: boolean;
+                backlogBoard?: string;
+                ownBoard?: boolean;
+                existing?: string;
+                existingFolder?: string;
+              },
+            ) => {
+              if (options.direction !== 'pull' && options.direction !== 'push') throw new Error('a direction is pull or push');
+              const made = await api.connect({
+                direction: options.direction,
+                name,
+                site: options.site,
+                project: options.key,
+                ...(options.title ? { title: options.title } : {}),
+                ...(options.board ? { board: options.board } : {}),
+                ...(options.jql ? { jql: options.jql } : {}),
+                restricted_comments: options.restrictedComments === true,
+                ...(options.backlogBoard !== undefined ? { backlog_board: options.backlogBoard } : {}),
+                ...(options.ownBoard !== undefined ? { own_board: options.ownBoard } : {}),
+                ...(options.existing ? { existing: { name: options.existing, ...(options.existingFolder ? { folder: options.existingFolder } : {}) } } : {}),
+              });
+              print(
+                `Added ${made.name} (${made.title ?? made.project}): ${made.direction} ${made.project} on ${siteKey(made.site)}${made.board ? `, board ${made.board}` : ''}${made.backlog_board ? `, onto the Backlog board ${made.backlog_board}` : ''}. Next: eidos jira describe ${made.name}, then eidos jira map ${made.name}${made.backlog_board ? `, and eidos jira match ${made.name} to give the board Jira's workflow` : ''}.`,
+              );
+            },
+          ),
         );
 
       command
@@ -986,11 +1022,10 @@ const entry: CliEntry = {
           action(async (site: string | undefined, options: { json?: boolean }) => {
             const rows = await api.boards(site);
             if (options.json) return json(rows);
-            if (rows.length === 0) return print(site ? `No board on ${siteKey(site)} is readable by your account.` : 'No board is readable by an account signed in here; eidos jira login <site> first.');
+            if (rows.length === 0)
+              return print(site ? `No board on ${siteKey(site)} is readable by your account.` : 'No board is readable by an account signed in here; eidos jira login <site> first.');
             for (const row of rows)
-              print(
-                `${row.site}  ${String(row.id).padStart(5)}  ${row.name} (${row.type}${row.project ? `, ${row.project}` : ''})${row.connected ? `  connected as ${row.connected}` : ''}`,
-              );
+              print(`${row.site}  ${String(row.id).padStart(5)}  ${row.name} (${row.type}${row.project ? `, ${row.project}` : ''})${row.connected ? `  connected as ${row.connected}` : ''}`);
           }),
         );
 
@@ -1041,9 +1076,16 @@ const entry: CliEntry = {
               },
               { move: options.moveTasks === true },
             );
-            print(done.connection.backlog_board ? `✓ ${done.connection.name} pulls onto the Backlog board ${done.connection.backlog_board}.` : `✓ ${done.connection.name} pulls onto the backlog's first board.`);
+            print(
+              done.connection.backlog_board
+                ? `✓ ${done.connection.name} pulls onto the Backlog board ${done.connection.backlog_board}.`
+                : `✓ ${done.connection.name} pulls onto the backlog's first board.`,
+            );
             if (done.moved.length > 0) print(`  ${done.moved.length} task${done.moved.length === 1 ? '' : 's'} it pulled moved there.`);
-            if (done.left.length > 0) print(`  ${done.left.length} stayed where they are, their status or type not one the board uses (${done.left.join(', ')}); eidos jira match ${done.connection.name} gives the board Jira's workflow, then run this again.`);
+            if (done.left.length > 0)
+              print(
+                `  ${done.left.length} stayed where they are, their status or type not one the board uses (${done.left.join(', ')}); eidos jira match ${done.connection.name} gives the board Jira's workflow, then run this again.`,
+              );
           }),
         );
 
@@ -1086,11 +1128,16 @@ const entry: CliEntry = {
                 if (options.json) return json(plan);
                 return print('Nothing written: run in a terminal to confirm, or pass --yes.');
               }
-              if (!(await confirm(plan.moved.length > 0 ? `Rewrite ${plan.moved.length} task${plan.moved.length === 1 ? '' : 's'} and change the Backlog's settings?` : "Change the Backlog's settings?"))) return;
+              if (
+                !(await confirm(plan.moved.length > 0 ? `Rewrite ${plan.moved.length} task${plan.moved.length === 1 ? '' : 's'} and change the Backlog's settings?` : "Change the Backlog's settings?"))
+              )
+                return;
             }
             const done = await api.match(name, mode);
             if (options.json) return json(done);
-            print(`✓ ${done.board ? `The Backlog board ${done.board}` : 'The Backlog'} matches ${name}${done.moved.length > 0 ? `; ${done.moved.length} task${done.moved.length === 1 ? '' : 's'} moved` : ''}, and the mapping pairs each Jira value with its namesake.`);
+            print(
+              `✓ ${done.board ? `The Backlog board ${done.board}` : 'The Backlog'} matches ${name}${done.moved.length > 0 ? `; ${done.moved.length} task${done.moved.length === 1 ? '' : 's'} moved` : ''}, and the mapping pairs each Jira value with its namesake.`,
+            );
           }),
         );
 

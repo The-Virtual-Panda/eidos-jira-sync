@@ -124,16 +124,16 @@ Both run only while the app has the root open, only for tasks edited here, never
 
 ## Settings
 
-| Setting             | Where                | What it does                                                                                    |
-| ------------------- | -------------------- | ----------------------------------------------------------------------------------------------- |
-| `pull_attachments`  | shared with the root | Download each issue's attachments through the Assets plugin instead of linking to Jira.         |
-| `attachments_folder` | shared with the root | The asset folder downloads go to; empty, the Assets plugin's first folder.                     |
-| `add_people`        | shared with the root | Add each person a pull finds that the root doesn't have to its users.                           |
-| `own_board`         | shared with the root | Give every board you connect from now on a Backlog board of its own, named after it.            |
-| `board_folders`     | shared with the root | Keep the tasks of a board made for a connection in a folder of their own.                       |
-| `auto_fetch`        | yours                | Fetch every 5, 15, 30, or 60 minutes while the app has the root open. Nothing pulls on its own. |
-| `auto_sync_on_save` | yours                | Sync a task edited here a few seconds after its last save.                                      |
-| `auto_sync_on_push` | yours                | Sync every task edited here once the app pushes.                                                |
+| Setting              | Where                | What it does                                                                                    |
+| -------------------- | -------------------- | ----------------------------------------------------------------------------------------------- |
+| `pull_attachments`   | shared with the root | Download each issue's attachments through the Assets plugin instead of linking to Jira.         |
+| `attachments_folder` | shared with the root | The asset folder downloads go to; empty, the Assets plugin's first folder.                      |
+| `add_people`         | shared with the root | Add each person a pull finds that the root doesn't have to its users.                           |
+| `own_board`          | shared with the root | Give every board you connect from now on a Backlog board of its own, named after it.            |
+| `board_folders`      | shared with the root | Keep the tasks of a board made for a connection in a folder of their own.                       |
+| `auto_fetch`         | yours                | Fetch every 5, 15, 30, or 60 minutes while the app has the root open. Nothing pulls on its own. |
+| `auto_sync_on_save`  | yours                | Sync a task edited here a few seconds after its last save.                                      |
+| `auto_sync_on_push`  | yours                | Sync every task edited here once the app pushes.                                                |
 
 Set one on the settings page, or with `eidos plugin set jira <setting> <value>`.
 

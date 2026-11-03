@@ -1437,7 +1437,10 @@ function Boards(props: { state: State; busy: string | null; act: Act; take: (ans
   const [boards, setBoards] = useState<BoardRow[] | null>(null);
   const [boardsError, setBoardsError] = useState<string | null>(null);
   const [picked, setPicked] = useState('');
-  const signedIn = props.state.sign_ins.filter((row) => row.email !== null).map((row) => `${row.site}/${row.email}`).join(',');
+  const signedIn = props.state.sign_ins
+    .filter((row) => row.email !== null)
+    .map((row) => `${row.site}/${row.email}`)
+    .join(',');
   const connectedKeys = props.state.connections.map((connection) => `${connection.site}/${connection.board ?? ''}`).join(',');
   useEffect(() => {
     if (!signedIn) return;
@@ -1507,9 +1510,19 @@ function Boards(props: { state: State; busy: string | null; act: Act; take: (ans
     })();
   let picker: JSX.Element | null = null;
   if (signedIn) {
-    if (boardsError) picker = <Text tone="error" size="sm">{t('boardsFailed', { error: boardsError })}</Text>;
+    if (boardsError)
+      picker = (
+        <Text tone="error" size="sm">
+          {t('boardsFailed', { error: boardsError })}
+        </Text>
+      );
     else if (!boards) picker = <SkeletonBar width={260} />;
-    else if (free.length === 0) picker = <Text tone="muted" size="sm">{t(boards.length === 0 ? 'noReadableBoards' : 'allBoardsConnected')}</Text>;
+    else if (free.length === 0)
+      picker = (
+        <Text tone="muted" size="sm">
+          {t(boards.length === 0 ? 'noReadableBoards' : 'allBoardsConnected')}
+        </Text>
+      );
     else {
       const chosen = free.find((board) => `${board.site}/${board.id}` === picked) ?? null;
       picker = (
@@ -1559,7 +1572,9 @@ function Boards(props: { state: State; busy: string | null; act: Act; take: (ans
                       data-testid={`jira-backlog-board-${connection.name}`}
                     >
                       <option value="">{t(backlogBoards.length === 0 ? 'wholeBacklog' : 'firstBoard')}</option>
-                      {connection.backlog_board && !backlogBoards.some((board) => board.name === connection.backlog_board) && <option value={connection.backlog_board}>{t('boardGone', { board: connection.backlog_board })}</option>}
+                      {connection.backlog_board && !backlogBoards.some((board) => board.name === connection.backlog_board) && (
+                        <option value={connection.backlog_board}>{t('boardGone', { board: connection.backlog_board })}</option>
+                      )}
                       {backlogBoards.map((board) => (
                         <option key={board.name} value={board.name}>
                           {board.title}
@@ -1585,11 +1600,7 @@ function Boards(props: { state: State; busy: string | null; act: Act; take: (ans
           control={
             <Row>
               <Input placeholder={t('boardPlaceholder')} aria-label={t('boardAddress')} value={address} onChange={(event: { target: HTMLInputElement }) => setAddress(event.target.value)} />
-              <Button
-                disabled={props.busy === 'connect' || !address.trim()}
-                onClick={() => connect({ url: address }, () => setAddress(''))}
-                data-testid="jira-connect"
-              >
+              <Button disabled={props.busy === 'connect' || !address.trim()} onClick={() => connect({ url: address }, () => setAddress(''))} data-testid="jira-connect">
                 {t('connect')}
               </Button>
             </Row>
@@ -1750,10 +1761,17 @@ function MappingPage(props: { name: string }): JSX.Element {
             </Stack>
           </Notice>
         )}
-        {matching && <MatchReview name={props.name} board={boardTitle} onClose={() => setMatching(false)} onMatched={() => {
-          setMatching(false);
-          read(false);
-        }} />}
+        {matching && (
+          <MatchReview
+            name={props.name}
+            board={boardTitle}
+            onClose={() => setMatching(false)}
+            onMatched={() => {
+              setMatching(false);
+              read(false);
+            }}
+          />
+        )}
         {body}
       </Stack>
     </Page>
@@ -2267,7 +2285,12 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
             label={t('attachmentsFolder')}
             hint={t('attachmentsFolderHint')}
             control={
-              <Select aria-label={t('attachmentsFolder')} value={chosenFolder} onChange={(event: { target: HTMLSelectElement }) => write('attachments_folder', event.target.value)} data-testid="jira-attachments-folder">
+              <Select
+                aria-label={t('attachmentsFolder')}
+                value={chosenFolder}
+                onChange={(event: { target: HTMLSelectElement }) => write('attachments_folder', event.target.value)}
+                data-testid="jira-attachments-folder"
+              >
                 {folders.map((folder) => (
                   <option key={folder} value={folder}>
                     {folder}/
@@ -2287,7 +2310,12 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
             label={t('ownBoardSetting')}
             hint={t('ownBoardSettingHint')}
             control={
-              <Switch checked={settings.own_board} aria-label={t('ownBoardSetting')} data-testid="jira-own-board" onChange={(event: { currentTarget: HTMLInputElement }) => write('own_board', event.currentTarget.checked)} />
+              <Switch
+                checked={settings.own_board}
+                aria-label={t('ownBoardSetting')}
+                data-testid="jira-own-board"
+                onChange={(event: { currentTarget: HTMLInputElement }) => write('own_board', event.currentTarget.checked)}
+              />
             }
           />
         )}
@@ -2296,7 +2324,12 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
             label={t('boardFolders')}
             hint={t('boardFoldersHint')}
             control={
-              <Switch checked={settings.board_folders} aria-label={t('boardFolders')} data-testid="jira-board-folders" onChange={(event: { currentTarget: HTMLInputElement }) => write('board_folders', event.currentTarget.checked)} />
+              <Switch
+                checked={settings.board_folders}
+                aria-label={t('boardFolders')}
+                data-testid="jira-board-folders"
+                onChange={(event: { currentTarget: HTMLInputElement }) => write('board_folders', event.currentTarget.checked)}
+              />
             }
           />
         )}
