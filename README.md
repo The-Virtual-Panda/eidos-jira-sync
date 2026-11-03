@@ -92,7 +92,7 @@ eidos jira configure:connection set acme --own-board --existing product --move-t
 eidos jira match acme --replace
 ```
 
-Needs the Eidos MD release after 0.18.0, whose Backlog holds boards.
+Needs Eidos MD 0.19.0 or later, whose Backlog lets a plugin add and shape a board.
 
 ## Several sections in one field
 
