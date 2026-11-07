@@ -53,6 +53,12 @@ import { matchBoardChange, matchChange, type BoardMatch, type MatchList, type Ma
 import { carriesSprints, readBoardSprints, SPRINT_SIDE } from './sprints.ts';
 import type { AssetsApi, BacklogApi, CommentsApi, TaskView } from './types.ts';
 
+// What a draft reads of the board. One for a connection that has pulled before leaves out that the board is scrum, so saving
+// its mapping for any other reason never turns its sprints into Backlog sprints: it stays as it works until the person moves it (Jira REQ26, REQ27).
+function forDraft(host: Host, connection: Connection, read: Description): Description {
+  return readState(host.workspace, connection.name).last_pull ? { ...read, board_type: null } : read;
+}
+
 // What moving a connection to Backlog sprints does (Jira REQ27).
 // A connection gone or no longer carrying sprints lets its board's go, unless another connection carries them there: the sprints stay, and a person runs them.
 async function letSprintsGo(host: Host, was: Connection): Promise<void> {
@@ -750,7 +756,7 @@ const entry: CliEntry = {
       describe: (name, refresh) => description(connectionNamed(host, name), refresh),
       draft: async (name) => {
         const connection = connectionNamed(host, name);
-        return draftMapping(connection, settingsFor(backlogOf(host), connection), await description(connection, false));
+        return draftMapping(connection, settingsFor(backlogOf(host), connection), forDraft(host, connection, await description(connection, false)));
       },
       accept: async (name, entries) => {
         const connection = connectionNamed(host, name);
@@ -836,7 +842,10 @@ const entry: CliEntry = {
       model: async (name, refresh) => {
         const connection = connectionNamed(host, name);
         // the board's name as Jira gives it, which the page titles itself by (Jira REQ22)
-        return { ...editorModel(connection, settingsFor(backlogOf(host), connection), await description(connection, refresh)), title: connection.title ?? connection.project };
+        return {
+          ...editorModel(connection, settingsFor(backlogOf(host), connection), forDraft(host, connection, await description(connection, refresh))),
+          title: connection.title ?? connection.project,
+        };
       },
       saveMapping: async (name, chosen) => {
         const connection = connectionNamed(host, name);
@@ -1291,7 +1300,7 @@ const entry: CliEntry = {
           action(async (name: string, options: { yes?: boolean; json?: boolean }) => {
             const connection = connectionNamed(host, name);
             const read = await description(connection, false);
-            const draft = draftMapping(connection, settingsFor(backlogOf(host), connection), read);
+            const draft = draftMapping(connection, settingsFor(backlogOf(host), connection), forDraft(host, connection, read));
             if (options.json) return json(draft);
             if (draft.entries.length === 0) print(`${connection.name}: nothing new to propose.`);
             const accepted: typeof draft.entries = [];
