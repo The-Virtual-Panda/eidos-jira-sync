@@ -99,3 +99,28 @@ test('a sprint field saved to a property named sprint keeps writing it, with not
   assert.doesNotMatch(backlogSettings(), /sprints_held/);
   assert.match(await ok(['jira', 'fetch', 'acme', '--full']), /nothing to pull/);
 });
+
+test('Jira Pull REQ3: a sprint field moved to the milestone reads every issue again on the next pull, without --full', async () => {
+  await setSprintPair('milestone');
+  const fetched = await ok(['jira', 'fetch', 'acme']);
+  assert.match(fetched, /the whole scope, read again as the mapping changed/);
+  await ok(['jira', 'pull', 'acme']);
+  assert.match(story(), /^milestone: Sprint 7$/m);
+  assert.match(await ok(['jira', 'fetch', 'acme']), /nothing to pull \(changed since/, 'and the next look reads only what changed');
+});
+
+test('Jira Pull REQ3: a connection moved from a property to Backlog sprints and on to the milestone fills each in, without --full', async () => {
+  await setSprintPair('property:sprint');
+  await ok(['jira', 'pull', 'acme']);
+  assert.match(story(), /^sprint: \["Sprint 7"\]$/m);
+  await ok(['jira', 'sprints', 'acme', '--yes']);
+  await ok(['jira', 'pull', 'acme']);
+  assert.match(story(), /^sprint: Sprint 7$/m);
+  // the milestone an earlier mapping wrote is the root's while nothing maps it (Jira Pull REQ6); cleared, so the pull below is what fills it
+  await ok(['backlog', 'set', 'T-ACME-2', '--milestone', '']);
+  assert.doesNotMatch(story(), /^milestone: Sprint 7$/m);
+  await setSprintPair('milestone');
+  await ok(['jira', 'pull', 'acme']);
+  assert.match(story(), /^milestone: Sprint 7$/m);
+  assert.match(await ok(['jira', 'fetch', 'acme']), /nothing to pull \(changed since/);
+});

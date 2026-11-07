@@ -336,7 +336,7 @@ function describePlan(plan: Plan): string {
   ];
   const sprintChanges = plan.sprints ? plan.sprints.add.length + plan.sprints.change.length + plan.sprints.rename.length + plan.sprints.remove.length : 0;
   const nothing = plan.add.length + plan.change.length + comments + plan.gone.length + plan.people.length + plan.attachments + sprintChanges === 0;
-  lines.push(`${plan.connection}: ${nothing ? 'nothing to pull' : head.join(', ')}${plan.since ? ` (changed since ${plan.since})` : ' (the whole scope)'}`);
+  lines.push(`${plan.connection}: ${nothing ? 'nothing to pull' : head.join(', ')}${plan.since ? ` (changed since ${plan.since})` : plan.remapped ? ' (the whole scope, read again as the mapping changed)' : ' (the whole scope)'}`);
   for (const add of plan.add) lines.push(`  + ${add.key}  ${add.title} (${add.type})`);
   for (const change of plan.change) lines.push(`  ~ ${change.key}  ${change.task}${change.fields.length > 0 ? `: ${change.fields.join(', ')}` : ''}`);
   for (const skipped of plan.skipped ?? []) lines.push(`  ⊘ ${skipped.key}  ${skipped.task} is marked Don't sync; the pull leaves it`);

@@ -12,7 +12,7 @@ import path from 'node:path';
 import type { Host } from 'eidosmd/plugin';
 import { adfToMarkdown, type AdfContext } from './adf.ts';
 import { siteBase, type Requester } from './client.ts';
-import { connections, siteKey, type Connection, type Pair } from './connections.ts';
+import { connections, siteKey, type Connection, type Mapping, type Pair } from './connections.ts';
 import { cachedDescription, categoryOf } from './describe.ts';
 import { bundlesOf, checklistFromJira, partPairs, realField as realFieldOf, sectionOf, splitIssue } from './bundle.ts';
 import { backlogCategory, DEFAULT_TYPE, fieldsFor, fieldsOf, linkTypeFor, priorityFor, statusFor, typeFor } from './mapping.ts';
@@ -106,6 +106,8 @@ export interface Held {
 export interface Plan {
   connection: string;
   since: string | null;
+  // the mapping changed since the last pull, so every issue is read again, whatever its last update (Jira Pull REQ3)
+  remapped?: boolean;
   add: Array<{ key: string; title: string; type: string }>;
   change: Array<{ key: string; task: string; fields: string[] }>;
   // tasks whose mapped fields were edited in the root since their last pull, and those fields (REQ5)
@@ -158,6 +160,8 @@ export interface State {
   paused?: { at: string; status: number | null; reason: string };
   // a pull has read every issue for its sprint since they came to be carried as the Backlog's own
   sprints_carried?: boolean;
+  // the mapping the last pull wrote with, as a short hash, so a change to it reads every issue again
+  mapping?: string;
 }
 
 const stateFile = (workspace: string, name: string): string => path.join(workspace, 'local', `state-${name.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}.json`);
@@ -253,6 +257,19 @@ export const short = (value: unknown): string =>
     .update(JSON.stringify(value ?? null))
     .digest('hex')
     .slice(0, 8);
+
+// A mapping's hash that its keys' order does not change, as a save of the settings page may write them in another
+const sorted = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(sorted)
+    : typeof value === 'object' && value !== null
+      ? Object.fromEntries(
+          Object.entries(value)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, entry]) => [key, sorted(entry)]),
+        )
+      : value;
+const mappingKey = (mapping: Mapping, pairs: Pair[]): string => short(sorted({ ...mapping, fields: pairs }));
 
 const named = (value: unknown): string | null => {
   if (typeof value === 'string') return value;
@@ -465,7 +482,10 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const boardSprints: JiraSprint[] = carrying ? await readBoardSprints(client, connection.board!) : [];
   const names = sprintNames(boardSprints);
   const sprintIndex: SprintIndex | undefined = carrying ? indexOf(boardSprints, names) : undefined;
-  const since = options.full || !state.last_pull ? null : new Date(new Date(state.last_pull).getTime() - OVERLAP_MINUTES * 60_000);
+  // a pull before this was kept has no mapping to compare, and is taken as made with this one
+  const mapped = mappingKey(connection.mapping, pairs);
+  const remapped = state.last_pull !== undefined && state.mapping !== undefined && state.mapping !== mapped;
+  const since = options.full || remapped || !state.last_pull ? null : new Date(new Date(state.last_pull).getTime() - OVERLAP_MINUTES * 60_000);
   const changedJql = since ? `(${scope}) AND updated >= "${jqlMoment(since, context.timeZone)}"` : scope;
   const wanted = [...new Set([...BASE_FIELDS, ...pairs.map((pair) => pair.jira)])];
   const issues = await search(client, `${changedJql} ORDER BY key ASC`, wanted, 100);
@@ -511,6 +531,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const plan: Plan = {
     connection: connection.name,
     since: since ? since.toISOString() : null,
+    ...(remapped ? { remapped: true } : {}),
     add: [],
     change: [],
     local: [],
@@ -558,7 +579,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
     }
     const was = task ? heldOf(task) : null;
     const updated = moment(issue.fields.updated);
-    if (task && was && !options.full && was.updated === updated && was.gone === undefined && !reread.has(issue.id)) {
+    if (task && was && !options.full && !remapped && was.updated === updated && was.gone === undefined && !reread.has(issue.id)) {
       plan.unchanged += 1;
       continue;
     }
@@ -830,7 +851,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   }
 
   done.people = people.added.size;
-  writeState(host.workspace, connection.name, { ...state, last_pull: now.toISOString(), last_fetch: { at: now.toISOString(), count: 0 }, ...(carrying ? { sprints_carried: true } : {}) });
+  writeState(host.workspace, connection.name, { ...state, last_pull: now.toISOString(), last_fetch: { at: now.toISOString(), count: 0 }, sprints_carried: carrying, mapping: mapped });
   lift(host, [connection.name]);
   return { plan, done };
 }
