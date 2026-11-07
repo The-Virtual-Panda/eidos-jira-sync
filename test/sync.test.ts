@@ -86,7 +86,7 @@ test('Jira Pull REQ5: a pull keeps Jira’s own value of each field beside the d
   const text = readFileSync(taskFile('T-ACME-3'), 'utf8');
   assert.match(text, /\n {2}remote:\n/);
   // Low is fourth of Highest, High, Medium, Low; the Backlog's lowest takes it
-  assert.match(text, /\npriority: low\n/);
+  assert.match(text, /\npriority: Low\n/);
 });
 
 test('Jira Sync REQ2, REQ3: a task edited here and an issue untouched there is a sync to Jira; status goes through the one transition', async () => {

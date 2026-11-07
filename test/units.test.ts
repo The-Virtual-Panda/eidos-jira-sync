@@ -147,6 +147,14 @@ test('Jira REQ12: a draft matches names and categories and proposes the sprint f
   assert.equal(find('fields', 'customfield_10020'), 'milestone');
 });
 
+test("Jira REQ26: a draft for a scrum board carries its sprints as the Backlog's own, unless a task property holds the key or the board is not scrum", () => {
+  const fieldOf = (board: BoardSettings, description: Description): string | undefined =>
+    draftMapping(connection(), board, description).entries.find((entry) => entry.part === 'fields' && entry.jira === 'customfield_10020')?.eidos;
+  assert.equal(fieldOf(BOARD, { ...DESCRIPTION, board_type: 'scrum' }), 'sprint');
+  assert.equal(fieldOf(BOARD, { ...DESCRIPTION, board_type: 'kanban' }), 'milestone');
+  assert.equal(fieldOf({ ...BOARD, properties: [...BOARD.properties, { name: 'sprint', type: 'List', options: null }] }, { ...DESCRIPTION, board_type: 'scrum' }), 'milestone');
+});
+
 test('Jira REQ12: a priority with no Backlog priority of its name is drafted by its rank, and a sub-task type is drafted to the default type', () => {
   const description: Description = {
     ...DESCRIPTION,

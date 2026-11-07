@@ -158,7 +158,7 @@ test('Jira REQ6, REQ12: describe reads the board and keeps it in local/; map dra
   assert.ok(existsSync(path.join(root, '.eidos', 'plugins', 'jira', 'local', 'describe-acme.json')));
   const drafted = await ok(['jira', 'map', 'acme']);
   assert.match(drafted, /statuses: Code Review → In Progress \(same category \(in_progress\)\)/);
-  assert.match(drafted, /priorities: Highest → high \(by rank \(1 of 4\)\)/);
+  assert.match(drafted, /priorities: Highest → High \(by rank \(1 of 4\)\)/);
   assert.match(drafted, /types: Sub-task → default/);
   assert.match(drafted, /Nothing written/);
   assert.doesNotMatch(readFileSync(path.join(root, '.eidos', 'plugins', 'jira', 'settings.yaml'), 'utf8'), /statuses/);
@@ -189,7 +189,7 @@ test('Jira Pull REQ1, REQ2, REQ4, REQ7 to REQ10: a fetch writes nothing; a pull 
   const fetched = await ok(['jira', 'fetch']);
   assert.match(fetched, /4 issues to add/);
   assert.match(fetched, /\+ ACME-2 {2}Ship the login page/);
-  assert.match(fetched, /milestones to add: Sprint 7/);
+  assert.match(fetched, /sprints to add: Sprint 7/, "a draft for a scrum board carries its sprints as the Backlog's own");
   assert.deepEqual(changedFiles(before, snapshot()), [], 'a fetch writes nothing to the root');
 
   fake.state.limitNext = true;
@@ -197,7 +197,7 @@ test('Jira Pull REQ1, REQ2, REQ4, REQ7 to REQ10: a fetch writes nothing; a pull 
   const story = readFileSync(taskFile('t-acme-2-ship'), 'utf8');
   assert.match(story, /^id: T-ACME-2$/m, 'the id is drawn from the key');
   assert.match(story, /^status: In Progress$/m, 'Code Review by its mapping');
-  assert.match(story, /^milestone: Sprint 7$/m);
+  assert.match(story, /^sprint: Sprint 7$/m);
   assert.match(story, /^assignee: \["ada"\]$/m, 'the root user of the same name');
   assert.match(story, /key: ACME-2/);
   assert.match(story, /parent: ACME-1/, "an epic's child keeps its epic in its jira key under the subtasks rule");
@@ -234,7 +234,7 @@ test('Jira Pull REQ5, D-C07: a change in Jira is shown and pulled; an edit in th
   assert.match(await ok(['jira', 'pull', '--keep-local']), /1 changed, 1 kept local edits/);
   let bug = readFileSync(taskFile('t-acme-3-'), 'utf8');
   assert.match(bug, /^title: Login button is misaligned on mobile$/m);
-  assert.match(bug, /^priority: high$/m);
+  assert.match(bug, /^priority: High$/m);
   assert.match(bug, /^status: In Progress$/m, 'the local edit kept');
   touch(fake.state, 'ACME-3', { summary: 'Login button is misaligned on phones' }, jiraNow());
   assert.match(await ok(['jira', 'fetch']), /was edited here: status/, 'still named until a pull without --keep-local');
@@ -244,7 +244,7 @@ test('Jira Pull REQ5, D-C07: a change in Jira is shown and pulled; an edit in th
 });
 
 test('Jira Pull REQ6: what the mapping leaves alone is never touched', async () => {
-  await ok(['backlog', 'set', 'T-ACME-2', '--body', 'implementation-notes=Found the bug in the form.']);
+  await ok(['backlog', 'set', 'T-ACME-2', '--add-line', 'acceptance-criteria=Found the bug in the form.']);
   touch(fake.state, 'ACME-2', { summary: 'Ship the login page now' }, jiraNow());
   await ok(['jira', 'pull']);
   const story = readFileSync(taskFile('t-acme-2-ship'), 'utf8');

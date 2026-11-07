@@ -101,9 +101,8 @@ export interface FakeState {
   requests: string[];
   // answer the next search with a 429 first
   limitNext: boolean;
-  // the board's sprints, and its type where the test says so
+  // the board's sprints
   sprints: Array<Record<string, unknown>>;
-  boardType?: string;
   // per issue id, the change histories the bulk changelog answers with
   changelogs: Map<string, Array<{ created: unknown; items: unknown[] }>>;
 }
@@ -305,7 +304,6 @@ export async function startFakeJira(state: FakeState = seed()): Promise<{ url: s
         ],
       });
     if (path === '/rest/agile/1.0/board/1/sprint') return send(200, { values: state.sprints, isLast: true });
-    if (path === '/rest/agile/1.0/board/1' && state.boardType) return send(200, { id: 1, type: state.boardType });
     const move = /^\/rest\/agile\/1\.0\/(?:sprint\/(\d+)\/issue|backlog\/issue)$/.exec(path);
     if (move && request.method === 'POST') {
       const asked = await body(request);

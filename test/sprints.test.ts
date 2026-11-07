@@ -64,7 +64,6 @@ const jiraNow = (): string => new Date(Date.now() + 60_000 + (tick += 1) * 1000)
 
 before(async () => {
   fake = await startFakeJira();
-  fake.state.boardType = 'scrum';
   fake.state.sprints = [
     { id: 6, name: 'Sprint 6', state: 'closed', boardId: 1, startDate: '2026-10-01T09:00:00.000Z', endDate: '2026-10-14T09:00:00.000Z', completeDate: '2026-10-15T09:00:00.000Z' },
     { id: 7, name: 'Sprint 7', state: 'active', boardId: 1, goal: 'Ship login', startDate: '2026-10-15T09:00:00.000Z', endDate: '2026-11-02T00:00:00.000Z' },
