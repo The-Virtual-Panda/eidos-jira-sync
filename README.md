@@ -13,7 +13,7 @@ Bring your team's Jira board into your Eidos root, and send your work back. Ever
 - **Sync on its own, when you trust it.** Off until you turn it on: after each save, after each push, or both. Anything to settle waits under **Needs you**.
 - **Private by design.** It runs on your machine and talks straight to your Jira site with your own API token. There is no server in between.
 
-Works from the terminal with Eidos MD 0.16.1 or later. Its pages in the app (the settings page, the Jira Sync sidebar, the panel beside an open task, the mapping page, the sync review) need the next Eidos MD release, the first to load a community plugin's page.
+Needs Eidos MD 0.21.0 or later.
 
 ## Get started
 
@@ -81,8 +81,6 @@ eidos jira match acme --dry-run
 eidos jira match acme --replace
 ```
 
-Needs the Eidos MD release after 0.16.1.
-
 ## A board of its own
 
 With several Jira boards, give each its own board in the Backlog, so each keeps its own workflow instead of being mapped onto one. On the settings page, pick a connection's **Backlog board**: one your Backlog has, or **A board of its own**, named after the Jira board. If your Backlog has no boards yet, you're asked what to call the board you have now, which keeps every task already there; the new board starts empty, and you can move the tasks the connection already pulled onto it. From then on a pull lands its issues there, and **Match the Backlog to Jira** changes that board alone: Jira's statuses and types are added to the project's, the board uses exactly Jira's workflow and columns, and no other board changes. Turn on `own_board` to give every board you connect from now on a board of its own.
@@ -91,8 +89,6 @@ With several Jira boards, give each its own board in the Backlog, so each keeps 
 eidos jira configure:connection set acme --own-board --existing product --move-tasks
 eidos jira match acme --replace
 ```
-
-Needs Eidos MD 0.19.0 or later, whose Backlog lets a plugin add and shape a board.
 
 ## Several sections in one field
 
