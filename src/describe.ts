@@ -49,6 +49,8 @@ export interface Description {
   filter: string | null;
   // the id of the field that holds an issue's sprints, when the site has one
   sprint_field: string | null;
+  // scrum or kanban, when the connection names a board; absent in a description read before it was kept
+  board_type?: string | null;
 }
 
 // Jira's three status categories as the Backlog names them.
@@ -156,6 +158,7 @@ export async function readDescription(client: Requester, connection: Connection,
   onStage({ step: 'link_types' });
   const links = await client.get<{ issueLinkTypes?: Array<{ name: string; outward: string; inward: string }> }>('/rest/api/3/issueLinkType');
   if (connection.board !== undefined) onStage({ step: 'sprints' });
+  const boardType = connection.board === undefined ? null : ((await client.get<{ type?: string }>(`/rest/agile/1.0/board/${connection.board}`).catch(() => null))?.type ?? null);
   const sprints =
     connection.board === undefined
       ? []
@@ -175,6 +178,7 @@ export async function readDescription(client: Requester, connection: Connection,
     sprints,
     filter,
     sprint_field: sprintField,
+    board_type: boardType,
   };
 }
 

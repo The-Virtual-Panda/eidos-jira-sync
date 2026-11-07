@@ -12,12 +12,27 @@ import path from 'node:path';
 import type { Host } from 'eidosmd/plugin';
 import { adfToMarkdown, type AdfContext } from './adf.ts';
 import { siteBase, type Requester } from './client.ts';
-import { siteKey, type Connection, type Pair } from './connections.ts';
+import { connections, siteKey, type Connection, type Pair } from './connections.ts';
 import { cachedDescription, categoryOf } from './describe.ts';
 import { bundlesOf, checklistFromJira, partPairs, realField as realFieldOf, sectionOf, splitIssue } from './bundle.ts';
-import { DEFAULT_TYPE, fieldsFor, fieldsOf, linkTypeFor, priorityFor, statusFor, typeFor } from './mapping.ts';
+import { backlogCategory, DEFAULT_TYPE, fieldsFor, fieldsOf, linkTypeFor, priorityFor, statusFor, typeFor } from './mapping.ts';
 import type { AssetsApi, BacklogApi, BoardSettings, CommentsApi, TaskFields, TaskView, ThreadView } from './types.ts';
 import { lift } from './pause.ts';
+import {
+  carriesSprints,
+  chooseSprint,
+  heldSprints,
+  holdFor,
+  indexOf,
+  openSprintIds,
+  readBoardSprints,
+  readReports,
+  SPRINT_SIDE,
+  sprintNames,
+  type JiraSprint,
+  type Report,
+  type SprintIndex,
+} from './sprints.ts';
 
 // ---- what Jira gives -----------------------------------------------------------------
 
@@ -110,6 +125,8 @@ export interface Plan {
   attachments: number;
   // the sprints a pull adds as milestones, the Backlog declaring none of that name
   milestones: string[];
+  // what a pull would change of the board's sprints, where they are carried as the Backlog's own (Jira Pull REQ17)
+  sprints?: { add: string[]; change: string[]; rename: Array<{ from: string; to: string }>; remove: string[]; other_boards: number };
   unchanged: number;
 }
 
@@ -139,6 +156,8 @@ export interface State {
   last_fetch?: { at: string; count: number; error?: string };
   // what runs on its own is held off this connection until the person acts (Jira REQ23)
   paused?: { at: string; status: number | null; reason: string };
+  // a pull has read every issue for its sprint since they came to be carried as the Backlog's own
+  sprints_carried?: boolean;
 }
 
 const stateFile = (workspace: string, name: string): string => path.join(workspace, 'local', `state-${name.toLowerCase().replace(/[^a-z0-9-]+/g, '-')}.json`);
@@ -271,6 +290,7 @@ function stripLocal(node: unknown): unknown {
 // The remote base of one pair: Jira's own value of its field (the parent by its issue id).
 export function remoteOf(issue: Issue, pair: Pair): string {
   if (pair.eidos === 'parent') return short(issue.fields.parent?.id ?? null);
+  if (pair.eidos === SPRINT_SIDE) return short(openSprintIds(issue.fields[pair.jira]));
   return short(rawOf(issue.fields[pair.jira]));
 }
 
@@ -300,6 +320,8 @@ export function heldValue(task: TaskView, eidos: string): unknown {
       return [...task.assignee].sort();
     case 'milestone':
       return task.milestone;
+    case 'sprint':
+      return task.sprint ?? null;
     case 'parent':
       return task.parent;
     case 'section':
@@ -409,6 +431,17 @@ export function peopleFor(context: Context, write: boolean): People {
   return { of, added };
 }
 
+// Whether another connection carries a Jira board's sprints onto the same Backlog board.
+function otherCarrier(host: Host, connection: Connection, backlog: BacklogApi): boolean {
+  return connections(host).some(
+    (other) =>
+      other.name !== connection.name &&
+      (other.backlog_board ?? null) === (connection.backlog_board ?? null) &&
+      other.board !== undefined &&
+      carriesSprints(fieldsOf(other, settingsFor(backlog, other))),
+  );
+}
+
 export async function run(context: Context, write: boolean, options: PullOptions = {}): Promise<{ plan: Plan; done: Done | null }> {
   const { host, backlog, client, connection } = context;
   const now = options.now ?? new Date();
@@ -422,6 +455,16 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const board = settingsFor(backlog, connection);
   const pairs = fieldsOf(connection, board);
   const scope = await scopeJql(client, connection);
+  // the board's sprints, read first: a task names one, and one that closed or went says which tasks to read again (Jira Pull REQ17, REQ18)
+  const carrying = carriesSprints(pairs) && connection.board !== undefined;
+  if (carrying && typeof backlog.holdSprints !== 'function') throw new Error(`${connection.name} carries sprints as the Backlog's own, which needs a newer Eidos MD`);
+  if (carrying && board.properties.some((property) => property.name === SPRINT_SIDE))
+    throw new Error(`a task property named sprint holds the key ${connection.name}'s sprints need; eidos jira sprints ${connection.name} moves it`);
+  if (carrying && otherCarrier(host, connection, backlog))
+    throw new Error(`another connection already carries its sprints onto ${connection.backlog_board ?? "this Backlog's board"}; a board's sprints come from one Jira board`);
+  const boardSprints: JiraSprint[] = carrying ? await readBoardSprints(client, connection.board!) : [];
+  const names = sprintNames(boardSprints);
+  const sprintIndex: SprintIndex | undefined = carrying ? indexOf(boardSprints, names) : undefined;
   const since = options.full || !state.last_pull ? null : new Date(new Date(state.last_pull).getTime() - OVERLAP_MINUTES * 60_000);
   const changedJql = since ? `(${scope}) AND updated >= "${jqlMoment(since, context.timeZone)}"` : scope;
   const wanted = [...new Set([...BASE_FIELDS, ...pairs.map((pair) => pair.jira)])];
@@ -451,7 +494,19 @@ export async function run(context: Context, write: boolean, options: PullOptions
   // changed it, so it comes back; read by id, a hundred at a time
   const pulledIds = new Set(issues.map((issue) => issue.id));
   const returning = [...held].filter(([id, task]) => inScope.has(id) && !pulledIds.has(id) && heldOf(task)!.gone !== undefined).map(([id]) => id);
-  for (let at = 0; at < returning.length; at += 100) issues.push(...(await search(client, `id in (${returning.slice(at, at + 100).join(', ')})`, wanted, 100)));
+  // every task the first time sprints are carried here, and after that a task holding one that went, or closed while it is open, whatever Jira's last update says (Jira Pull REQ18)
+  const reread = new Set<string>();
+  if (sprintIndex) {
+    const byName = new Map([...sprintIndex.values()].map((sprint) => [sprint.name.toLowerCase(), sprint]));
+    for (const [id, task] of held) {
+      if (!inScope.has(id) || skipOf(task)) continue;
+      const named = task.sprint ? byName.get(task.sprint.toLowerCase()) : null;
+      const gone = Boolean(task.sprint) && (named === undefined || (named?.state === 'closed' && task.status !== null && backlogCategory(board, task.status) !== 'done'));
+      if (!state.sprints_carried || gone) reread.add(id);
+    }
+  }
+  const again = [...new Set([...returning, ...[...reread].filter((id) => !pulledIds.has(id))])];
+  for (let at = 0; at < again.length; at += 100) issues.push(...(await search(client, `id in (${again.slice(at, at + 100).join(', ')})`, wanted, 100)));
 
   const plan: Plan = {
     connection: connection.name,
@@ -488,6 +543,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const mention = (account: string, name: string): string | null => people.of({ accountId: account, displayName: name })?.user ?? null;
 
   const intents: Intent[] = [];
+  let otherBoards = 0;
   for (const issue of issues) {
     const jiraType = issue.fields.issuetype?.name ?? '';
     const type = typeFor(connection.mapping, board, jiraType);
@@ -502,7 +558,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
     }
     const was = task ? heldOf(task) : null;
     const updated = moment(issue.fields.updated);
-    if (task && was && !options.full && was.updated === updated && was.gone === undefined) {
+    if (task && was && !options.full && was.updated === updated && was.gone === undefined && !reread.has(issue.id)) {
       plan.unchanged += 1;
       continue;
     }
@@ -520,9 +576,11 @@ export async function run(context: Context, write: boolean, options: PullOptions
     // a field several sections are mapped to is read as one part per section (Jira REQ21)
     const typePairs = fieldsFor(pairs, issue.fields.issuetype?.name ?? '');
     const bundles = bundlesOf(typePairs);
-    const issuePairs = partPairs(typePairs, bundles);
+    const typedPairs = partPairs(typePairs, bundles);
     const { issue: seen, absent } = splitIssue(issue, bundles, board);
-    const intended = intendFields(connection, board, seen, type, issuePairs, people, adf, carried, jiraPriorities);
+    const intended = intendFields(connection, board, seen, type, typedPairs, people, adf, carried, jiraPriorities, sprintIndex, true);
+    const issuePairs = pairsHeld(typedPairs, seen);
+    otherBoards += intended.foreignSprints;
     const { fields, parentIssue, parentKey } = intended;
     if (intended.sprint) sprints.set(intended.sprint.name, intended.sprint.end);
     if (intended.parentLeftOut) plan.left_out.parents += 1;
@@ -597,6 +655,11 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const declared = new Set(backlog.milestones().map((milestone) => milestone.name.toLowerCase()));
   plan.people = [...people.added].sort();
   plan.milestones = [...sprints.keys()].filter((name) => !declared.has(name.toLowerCase())).sort();
+  const onBacklogBoard = onto ? { board: onto.name } : {};
+  if (carrying) {
+    const change = await backlog.holdSprints!(holdFor(connection), heldSprints(boardSprints, names), { ...onBacklogBoard, dryRun: true });
+    plan.sprints = { add: change.added, change: change.changed, rename: change.renamed, remove: change.removed.map((sprint) => sprint.name), other_boards: otherBoards };
+  }
 
   if (!write) {
     writeState(host.workspace, connection.name, { ...state, last_fetch: { at: now.toISOString(), count: plan.add.length + plan.change.length + plan.gone.length } });
@@ -610,6 +673,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const keyedId = (key: string): string => `T-${key}`;
   // a sprint becomes a milestone of its name, dated when it ends, before any task names it
   for (const name of plan.milestones) await backlog.addMilestone({ name, date: sprints.get(name) ?? null });
+  if (carrying) await backlog.holdSprints!(holdFor(connection), heldSprints(boardSprints, names), onBacklogBoard);
   for (const intent of intents) {
     const { issue } = intent;
     const index = byIssue();
@@ -740,8 +804,33 @@ export async function run(context: Context, write: boolean, options: PullOptions
     done.gone += 1;
   }
 
+  // the reports the sprints still want, now every task is in place to be named (Jira Pull REQ19)
+  if (carrying) {
+    const heldNow = backlog.sprints?.(onBacklogBoard) ?? [];
+    const wanting = boardSprints.filter((sprint) => {
+      const here = heldNow.find((held) => held.source === String(sprint.id));
+      return sprint.state === 'closed' ? here?.result === null : sprint.state === 'active' && here?.committed.length === 0;
+    });
+    const sprintField = pairs.find((pair) => pair.eidos === SPRINT_SIDE)!.jira;
+    const byId = byIssue();
+    const reports: Map<number, Report> = await readReports(
+      context,
+      wanting,
+      names,
+      sprintField,
+      scope,
+      (jql, fields) => search(client, jql, fields, 100),
+      (issue) => {
+        const task = byId.get(issue.id);
+        return { id: task ? (task.id ?? task.name) : issue.key, title: task?.title ?? issue.title };
+      },
+      board,
+    );
+    if (reports.size > 0) await backlog.holdSprints!(holdFor(connection), heldSprints(boardSprints, names, reports), onBacklogBoard);
+  }
+
   done.people = people.added.size;
-  writeState(host.workspace, connection.name, { ...state, last_pull: now.toISOString(), last_fetch: { at: now.toISOString(), count: 0 } });
+  writeState(host.workspace, connection.name, { ...state, last_pull: now.toISOString(), last_fetch: { at: now.toISOString(), count: 0 }, ...(carrying ? { sprints_carried: true } : {}) });
   lift(host, [connection.name]);
   return { plan, done };
 }
@@ -753,7 +842,12 @@ export interface Intended {
   parentKey: string | null;
   parentLeftOut: boolean;
   sprint: { name: string; end: string | null } | null;
+  // the sprints another board runs that this issue lists, which are not carried
+  foreignSprints: number;
 }
+
+// The pairs that hold for an issue: a Jira sub-task goes with its parent and has no sprint of its own to judge, while a story under its epic does (Jira Pull REQ18).
+export const pairsHeld = (pairs: Pair[], issue: Pick<Issue, 'fields'>): Pair[] => (issue.fields.issuetype?.subtask === true ? pairs.filter((pair) => pair.eidos !== SPRINT_SIDE) : pairs);
 
 export function intendFields(
   connection: Connection,
@@ -765,9 +859,12 @@ export function intendFields(
   adf: AdfContext,
   carried: Set<string>,
   jiraPriorities: string[] = [],
+  sprints?: SprintIndex,
+  // those sprints are all the board has, just read from Jira
+  sprintsWhole = false,
 ): Intended {
   const fields: TaskFields = { type };
-  const out: Intended = { fields, parentIssue: null, parentKey: null, parentLeftOut: false, sprint: null };
+  const out: Intended = { fields, parentIssue: null, parentKey: null, parentLeftOut: false, sprint: null, foreignSprints: 0 };
   for (const pair of issuePairs) {
     const value = issue.fields[pair.jira];
     const [head, name = ''] = pair.eidos.split(/:(.*)/s);
@@ -818,6 +915,14 @@ export function intendFields(
     }
   }
   if (fields.title === undefined) fields.title = named(issue.fields.summary) ?? issue.key;
+  // read last, since which sprint a task holds turns on whether its status is done, and on whether it is a subtask
+  const sprintPair = issuePairs.find((pair) => pair.eidos === SPRINT_SIDE);
+  if (sprintPair && issue.fields.issuetype?.subtask !== true) {
+    const done = fields.status !== undefined && fields.status !== null && backlogCategory(board, fields.status) === 'done';
+    const chosen = chooseSprint(issue.fields[sprintPair.jira], sprints ?? new Map(), connection.board, done, sprintsWhole);
+    fields.sprint = chosen.name;
+    out.foreignSprints = chosen.foreign;
+  }
   return out;
 }
 
@@ -864,6 +969,8 @@ export function intendedValue(fields: TaskFields, eidos: string): unknown {
       return [...(fields.assignee ?? [])].sort();
     case 'milestone':
       return fields.milestone ?? null;
+    case 'sprint':
+      return fields.sprint ?? null;
     case 'section':
       return (fields.sections?.[name] ?? '').trim();
     case 'property':
@@ -884,7 +991,8 @@ function dropField(fields: TaskFields, eidos: string): void {
   const [head, name = ''] = eidos.split(/:(.*)/s);
   if (head === 'section' && fields.sections) delete fields.sections[name];
   else if (head === 'property' && fields.properties) delete fields.properties[name];
-  else if (head === 'title' || head === 'type' || head === 'status' || head === 'priority' || head === 'assignee' || head === 'milestone' || head === 'parent') delete fields[head];
+  else if (head === 'title' || head === 'type' || head === 'status' || head === 'priority' || head === 'assignee' || head === 'milestone' || head === 'sprint' || head === 'parent')
+    delete fields[head];
 }
 
 function rewriteTexts(fields: TaskFields, pairs: Pair[], issue: Issue, board: BoardSettings, adf: AdfContext): void {

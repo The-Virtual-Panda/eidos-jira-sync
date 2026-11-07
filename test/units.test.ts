@@ -1,5 +1,6 @@
 // The pure parts on their own: ADF to markdown, the mapping's defaults and
 // checks, the JQL moment, the site address, and a Jira time as a task's date.
+import { buildReports, chooseSprint, openSprintIds, sprintNames } from '../src/sprints.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { adfToMarkdown } from '../src/adf.ts';
@@ -436,7 +437,11 @@ test('Jira REQ24: Add and rename adds what Jira has and renames what the mapping
     ['default', 'bug', 'story'],
   );
   // a status added goes to the column Jira shows it in
-  assert.equal(matchChange(BOARD_READ, BOARD, {}, 'add').change.statuses?.columns?.find((column) => column.name === 'Doing'), undefined, 'In Progress was already on the board');
+  assert.equal(
+    matchChange(BOARD_READ, BOARD, {}, 'add').change.statuses?.columns?.find((column) => column.name === 'Doing'),
+    undefined,
+    'In Progress was already on the board',
+  );
 });
 
 test("Jira REQ24: Replace makes each list Jira's, a value Jira lacks removed with its tasks moved to what it is read as, else the first of its category", () => {
@@ -467,4 +472,89 @@ test("Jira REQ24: Replace makes each list Jira's, a value Jira lacks removed wit
       ['Bug', 'bug'],
     ],
   );
+});
+
+test('Jira Pull REQ17: a repeated or reserved sprint name takes its id, and only it', () => {
+  const names = sprintNames([
+    { id: 1, name: 'Sprint 1', state: 'closed' },
+    { id: 2, name: 'sprint-1', state: 'future' },
+    { id: 3, name: 'Active', state: 'future' },
+    { id: 4, name: 'Next', state: 'future' },
+  ]);
+  assert.deepEqual([...names.values()], ['Sprint 1', 'sprint-1 (2)', 'Active (3)', 'Next']);
+});
+
+test('Jira Pull REQ18: the sprint a task holds, of those Jira lists in no order', () => {
+  const known = new Map([
+    ['1', { name: 'Old', state: 'closed', at: 0 }],
+    ['2', { name: 'Older', state: 'closed', at: 1 }],
+    ['3', { name: 'Now', state: 'active', at: 2 }],
+    ['4', { name: 'Soon', state: 'planned', at: 3 }],
+    ['5', { name: 'Later', state: 'planned', at: 4 }],
+  ]);
+  const listed = (...ids: number[]): unknown[] => ids.map((id) => ({ id, name: `s${id}`, state: 'x', boardId: 1, completeDate: `2026-01-0${id}` }));
+  assert.equal(chooseSprint(listed(1, 3, 4), known, 1, false).name, 'Now');
+  // a real board's case: planned beside a closed one listed after it; the planned wins whatever the order
+  assert.equal(chooseSprint(listed(5, 4, 1), known, 1, false).name, 'Soon');
+  assert.equal(chooseSprint(listed(1, 2), known, 1, false).name, null, 'open with only closed ones sits in the backlog');
+  assert.equal(chooseSprint(listed(1, 2), known, 1, true).name, 'Older', 'done, it keeps the last to close');
+  assert.deepEqual(chooseSprint([{ id: 9, name: 'Theirs', state: 'active', boardId: 2 }], known, 1, false), { name: null, foreign: 1 });
+  assert.equal(chooseSprint([{ id: 9, name: 'New', state: 'active', boardId: 1 }], known, 1, false).name, 'New', 'one this board has not been read for yet still counts');
+});
+
+test("Jira Sync: Jira's closed sprints growing changes nothing a sync reads", () => {
+  const open = (ids: Array<[number, string]>): unknown => openSprintIds(ids.map(([id, state]) => ({ id, name: 'n', state })));
+  assert.deepEqual(
+    open([
+      [3, 'active'],
+      [1, 'closed'],
+    ]),
+    [3],
+  );
+  assert.deepEqual(
+    open([
+      [1, 'closed'],
+      [2, 'closed'],
+      [3, 'active'],
+    ]),
+    [3],
+  );
+  assert.equal(open([[1, 'closed']]), null);
+});
+
+test('Jira Pull REQ19: a report reads what a sprint held at its start and at its close, and where the unfinished went', () => {
+  const sprint = { id: 5, name: 'Five', state: 'closed', startDate: '2026-01-01T00:00:00.000Z', completeDate: '2026-01-15T00:00:00.000Z' };
+  const at = (day: string): string => `2026-01-${day}T00:00:00.000Z`;
+  const issue = (id: string, status: string, sprints: number[]) => ({ id, key: `K-${id}`, created: Date.parse('2025-12-01T00:00:00.000Z'), title: id, status, sprints });
+  const moved = (day: string, from: string, to: string) => ({
+    at: Date.parse(at(day)),
+    sprintsFrom: from.split(',').map(Number).filter(Boolean),
+    sprintsTo: to.split(',').map(Number).filter(Boolean),
+    statusFrom: null,
+    statusTo: null,
+  });
+  const issues = [issue('stayed', 'Done', [5]), issue('joined', 'Done', [5]), issue('left', 'To Do', []), issue('carried', 'To Do', [5, 6]), issue('never', 'To Do', [])];
+  const changes = new Map([
+    ['joined', [moved('05', '', '5')]],
+    ['left', [moved('05', '5', '')]],
+    ['carried', [moved('15', '5', '5,6')]],
+  ]);
+  const report = buildReports(
+    [sprint],
+    new Map([
+      [5, 'Five'],
+      [6, 'Six'],
+    ]),
+    issues,
+    changes as never,
+    (held) => ({ id: held.key, title: held.title }),
+    (status) => status === 'Done',
+  ).get(5)!;
+  const ids = (tasks: Array<{ id: string }>): string[] => tasks.map((task) => task.id);
+  assert.deepEqual(ids(report.committed), ['K-stayed', 'K-left', 'K-carried']);
+  assert.deepEqual(ids(report.result!.added), ['K-joined']);
+  assert.deepEqual(ids(report.result!.removed), ['K-left']);
+  assert.deepEqual(ids(report.result!.completed), ['K-stayed', 'K-joined']);
+  assert.deepEqual(ids(report.result!.carried), ['K-carried']);
+  assert.equal(report.result!.carried_to, 'Six');
 });

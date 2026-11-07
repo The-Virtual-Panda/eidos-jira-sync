@@ -29,7 +29,19 @@ import {
   type Pair,
 } from './connections.ts';
 import { cachedDescription, keepDescription, readDescription, type Description } from './describe.ts';
-import { checkMapping, compactFields, defaultFields, draftMapping, editorModel, type DraftEntry, type EditorModel, type MappingChoice, type MappingProblem, PARENT_RULES } from './mapping.ts';
+import {
+  checkMapping,
+  compactFields,
+  defaultFields,
+  draftMapping,
+  editorModel,
+  fieldsOf,
+  type DraftEntry,
+  type EditorModel,
+  type MappingChoice,
+  type MappingProblem,
+  PARENT_RULES,
+} from './mapping.ts';
 import { ask, confirm, readLines } from './prompt.ts';
 import { create as createIssue, parentsFirst, prepareCreate, type CreateOptions, type CreatePlan, type Created } from './create.ts';
 import { heldOf, readState, run, skipOf, writeState, type Done, type Plan } from './pull.ts';
@@ -38,10 +50,32 @@ import { apply as applySync, editedHere, journalOf, prepare as prepareSync, send
 import { tokensFile } from './tokens.ts';
 import { lift, onSite, pause, pauseOf, pauses, refusalOf, type Pause } from './pause.ts';
 import { matchBoardChange, matchChange, type BoardMatch, type MatchList, type MatchMode } from './reshape.ts';
+import { carriesSprints, readBoardSprints, SPRINT_SIDE } from './sprints.ts';
 import type { AssetsApi, BacklogApi, CommentsApi, TaskView } from './types.ts';
+
+// What moving a connection to Backlog sprints does (Jira REQ27).
+// A connection gone or no longer carrying sprints lets its board's go, unless another connection carries them there: the sprints stay, and a person runs them.
+async function letSprintsGo(host: Host, was: Connection): Promise<void> {
+  const backlog = backlogOf(host);
+  const pairs = (held: Connection): Pair[] => fieldsOf(held, settingsFor(backlog, held));
+  if (!carriesSprints(was.mapping.fields ?? []) || !backlog.releaseSprints) return;
+  const still = connections(host).some((held) => held.backlog_board === was.backlog_board && carriesSprints(pairs(held)));
+  if (!still) await backlog.releaseSprints('jira', was.backlog_board ? { board: was.backlog_board } : {});
+}
+
+export interface SprintMovePlan {
+  connection: string;
+  field: string;
+  from: string | null;
+  property_tasks: string[];
+  milestones: Array<{ name: string; tasks: string[]; removed: boolean }>;
+  already: boolean;
+}
 
 export interface JiraApi {
   connections(): Connection[];
+  // a connection that keeps its sprints as something else moved to Backlog sprints (Jira REQ27); a dry run says what it would do
+  moveToSprints(name: string, options?: { dryRun?: boolean }): Promise<SprintMovePlan>;
   fetch(name?: string): Promise<Plan[]>;
   pull(name?: string, options?: { full?: boolean; keepLocal?: boolean }): Promise<Done[]>;
   // what the Backlog's head says per pull connection: the last fetch's count, or why it failed
@@ -294,7 +328,8 @@ function describePlan(plan: Plan): string {
     ...(plan.people.length > 0 ? [`${count(plan.people.length, 'person', 'people')} to add`] : []),
     ...(plan.gone.length > 0 ? [`${plan.gone.length} gone`] : []),
   ];
-  const nothing = plan.add.length + plan.change.length + comments + plan.gone.length + plan.people.length + plan.attachments === 0;
+  const sprintChanges = plan.sprints ? plan.sprints.add.length + plan.sprints.change.length + plan.sprints.rename.length + plan.sprints.remove.length : 0;
+  const nothing = plan.add.length + plan.change.length + comments + plan.gone.length + plan.people.length + plan.attachments + sprintChanges === 0;
   lines.push(`${plan.connection}: ${nothing ? 'nothing to pull' : head.join(', ')}${plan.since ? ` (changed since ${plan.since})` : ' (the whole scope)'}`);
   for (const add of plan.add) lines.push(`  + ${add.key}  ${add.title} (${add.type})`);
   for (const change of plan.change) lines.push(`  ~ ${change.key}  ${change.task}${change.fields.length > 0 ? `: ${change.fields.join(', ')}` : ''}`);
@@ -307,6 +342,13 @@ function describePlan(plan: Plan): string {
   for (const gone of plan.gone) lines.push(`  - ${gone.key}  ${gone.task} is gone from the scope; its task stays`);
   for (const back of plan.back) lines.push(`  ↺ ${back.key}  ${back.task} is back in the scope`);
   if (plan.milestones.length > 0) lines.push(`  milestones to add: ${plan.milestones.join(', ')}`);
+  if (plan.sprints) {
+    if (plan.sprints.add.length > 0) lines.push(`  sprints to add: ${plan.sprints.add.join(', ')}`);
+    if (plan.sprints.change.length > 0) lines.push(`  sprints to change: ${plan.sprints.change.join(', ')}`);
+    for (const rename of plan.sprints.rename) lines.push(`  sprint renamed: ${rename.from} → ${rename.to}`);
+    if (plan.sprints.remove.length > 0) lines.push(`  sprints to remove: ${plan.sprints.remove.join(', ')}`);
+    if (plan.sprints.other_boards > 0) lines.push(`  left out: ${count(plan.sprints.other_boards, 'sprint')} another board runs`);
+  }
   if (plan.attachments > 0) lines.push(`  ${count(plan.attachments, 'attachment')} to download`);
   const types = Object.entries(plan.left_out.types);
   if (types.length > 0) lines.push(`  left out: ${types.map(([type, n]) => `${n} ${type}`).join(', ')} (types the mapping does not carry)`);
@@ -650,6 +692,60 @@ const entry: CliEntry = {
           host,
           connections(host).filter((held) => held.name !== found.name),
         );
+        await letSprintsGo(host, found);
+      },
+      moveToSprints: async (name, options = {}) => {
+        const connection = connectionNamed(host, name);
+        const backlog = backlogOf(host);
+        if (connection.board === undefined) throw new Error(`${connection.name} names no board, and a sprint belongs to one`);
+        const read = await description(connection, false);
+        if (read.board_type && read.board_type !== 'scrum') throw new Error(`${connection.name}'s board is a ${read.board_type} board, which has no sprints to carry`);
+        if (!read.sprint_field) throw new Error(`${connection.name}'s site has no sprint field`);
+        const board = settingsFor(backlog, connection);
+        const fields = connection.mapping.fields ?? defaultFields(board);
+        const paired = fields.filter((pair) => pair.jira.toLowerCase() === read.sprint_field!.toLowerCase());
+        const from = paired.find((pair) => pair.eidos !== SPRINT_SIDE)?.eidos ?? paired[0]?.eidos ?? null;
+        const keyTaken = backlog.settings().properties.some((property) => property.name === SPRINT_SIDE);
+        if (keyTaken && from !== `property:${SPRINT_SIDE}`)
+          throw new Error(`a task property named sprint holds the key, and ${connection.name} does not write it; eidos backlog configure:property set sprint --rename <name> frees it first`);
+        const site = siteKey(connection.site);
+        const pulled = (task: TaskView): boolean => {
+          const held = heldOf(task);
+          return held !== null && siteKey(held.site) === site;
+        };
+        // the milestones that only named a sprint: a task of this connection's holds it, and no other task does
+        const milestones: SprintMovePlan['milestones'] = [];
+        if (from === 'milestone') {
+          const names = new Set(
+            (await readBoardSprints(jiraClient(connection.site, credentials(host, connection.site), connection.name), connection.board)).map((sprint) => sprint.name.toLowerCase()),
+          );
+          for (const name of [...new Set(backlog.tasks().flatMap((task) => (task.milestone ? [task.milestone] : [])))]) {
+            if (!names.has(name.toLowerCase())) continue;
+            const holders = backlog.tasks().filter((task) => task.milestone === name);
+            const ours = holders.filter(pulled);
+            milestones.push({ name, tasks: ours.map((task) => task.id ?? task.name), removed: ours.length === holders.length });
+          }
+        }
+        const property = keyTaken ? await backlog.freeSprintKey!({ dryRun: true }) : { tasks: [] };
+        const plan: SprintMovePlan = { connection: connection.name, field: read.sprint_field, from, property_tasks: property.tasks, milestones, already: from === SPRINT_SIDE && !keyTaken };
+        if (options.dryRun || plan.already) return plan;
+        if (keyTaken) await backlog.freeSprintKey!();
+        for (const milestone of milestones) {
+          if (milestone.removed) await backlog.removeMilestone!(milestone.name, { clearTasks: true });
+          else
+            for (const task of milestone.tasks) {
+              const held = backlog.get(task);
+              backlog.set(task, { milestone: null, ...(held.updated ? { updated: held.updated } : {}) });
+            }
+        }
+        // a field may be paired per issue type: every pair of it moves, and they read as one, since a sprint is not a type's
+        const others = fields.filter((pair) => pair.jira.toLowerCase() !== read.sprint_field!.toLowerCase());
+        const next = [...others, { jira: read.sprint_field, eidos: SPRINT_SIDE }];
+        await writeConnections(
+          host,
+          connections(host).map((held) => (held.name === connection.name ? { ...held, mapping: { ...held.mapping, fields: next } } : held)),
+        );
+        return plan;
       },
       describe: (name, refresh) => description(connectionNamed(host, name), refresh),
       draft: async (name) => {
@@ -1049,6 +1145,36 @@ const entry: CliEntry = {
             const found = connectionNamed(host, name);
             await api.disconnect(found.name);
             print(`Removed ${found.name}; the tasks it pulled stay where they are.`);
+          }),
+        );
+
+      command
+        .command('sprints')
+        .argument('<connection>', "the connection's name")
+        .option('--dry-run', 'say what would change and write nothing', false)
+        .option('--yes', 'make the change', false)
+        .description("move a connection that keeps its sprints as a milestone or a property to the Backlog's own sprints, run in Jira")
+        .action(
+          action(async (name: string, options: { dryRun: boolean; yes: boolean }) => {
+            const plan = await api.moveToSprints(name, { dryRun: true });
+            if (plan.already) {
+              print(`${plan.connection} already carries its sprints as Backlog sprints.`);
+              return;
+            }
+            print(`${plan.connection}: ${plan.field} moves from ${plan.from ?? 'nothing'} to the Backlog's sprints.`);
+            if (plan.from === `property:${SPRINT_SIDE}`)
+              print(`  the property sprint stops being declared, and its value leaves ${plan.property_tasks.length} task${plan.property_tasks.length === 1 ? '' : 's'}`);
+            for (const milestone of plan.milestones)
+              print(
+                `  ${milestone.removed ? `the milestone ${milestone.name} is removed` : `the milestone ${milestone.name} stays for other tasks`}, and leaves ${milestone.tasks.length} task${milestone.tasks.length === 1 ? '' : 's'}`,
+              );
+            print(`  Everything taken out is Jira's: the next pull reads every issue again and writes each task's sprint.`);
+            if (options.dryRun || !options.yes) {
+              if (!options.dryRun) print(`Run it with --yes to make the change.`);
+              return;
+            }
+            await api.moveToSprints(name);
+            print(`Done. eidos jira pull ${plan.connection} brings the sprints in.`);
           }),
         );
 

@@ -14,8 +14,26 @@ import { siteKey } from './connections.ts';
 import { cachedDescription, keepDescription, readDescription, type Description, type JiraField, type JiraType } from './describe.ts';
 import { fieldsFor, fieldsOf, syncOf, typeFor } from './mapping.ts';
 import { bundlesOf, composeText, partPairs, splitIssue } from './bundle.ts';
-import { heldOf, heldValue, intendFields, intendedValue, jqlMoment, moment, normalise, peopleFor, prioritiesOf, remoteOf, short, skipOf, type Context, type Held, type Issue } from './pull.ts';
-import { accountFor, copySide, priorityOut, SyncRefused, valueOut, type Blocker, type EditField } from './sync.ts';
+import {
+  heldOf,
+  heldValue,
+  intendFields,
+  intendedValue,
+  jqlMoment,
+  pairsHeld,
+  moment,
+  normalise,
+  peopleFor,
+  prioritiesOf,
+  remoteOf,
+  short,
+  skipOf,
+  type Context,
+  type Held,
+  type Issue,
+} from './pull.ts';
+import { accountFor, copySide, moveToSprint, priorityOut, SyncRefused, valueOut, type Blocker, type EditField } from './sync.ts';
+import { carriesSprints, indexFromBacklog } from './sprints.ts';
 import type { TaskFields, TaskView } from './types.ts';
 
 export interface CreatePlan {
@@ -167,7 +185,7 @@ export async function prepareCreate(context: Context, task: TaskView, options: C
     const [head] = pair.eidos.split(':');
     const bundle = bundles.find((held) => held.field === pair.jira);
     if (bundle && bundle.sides[0] !== pair.eidos) continue;
-    if (syncOf(pair) === 'pull' || head === 'status' || head === 'type' || head === 'milestone') continue;
+    if (syncOf(pair) === 'pull' || head === 'status' || head === 'type' || head === 'milestone' || head === 'sprint') continue;
     if (head === 'parent') continue;
     const field = onScreen.get(pair.jira);
     const value = bundle ? composeText(bundle, Object.fromEntries(bundle.sides.map((side) => [side, String(heldValue(task, side) ?? '')])), board) : heldValue(task, pair.eidos);
@@ -327,16 +345,26 @@ async function link(context: Context, task: TaskView, ref: { id: string; key: st
   const { backlog, connection } = context;
   const name = task.id ?? task.name;
   const board = settingsFor(backlog, connection);
+  const heldNow = carriesSprints(fieldsOf(connection, board)) ? (backlog.sprints?.(connection.backlog_board ? { board: connection.backlog_board } : {}) ?? []) : [];
+  // the task's sprint, once its issue exists (Jira Push REQ12): if Jira refuses, the issue stands in its backlog and a sync settles it
+  const sprintTo = task.sprint ? heldNow.find((sprint) => sprint.name === task.sprint && sprint.source !== null && sprint.state !== 'closed')?.source : null;
+  if (sprintTo) {
+    await moveToSprint(context, ref.key, Number(sprintTo)).catch((cause: unknown) => {
+      if (!(cause instanceof JiraError)) throw cause;
+    });
+  }
   const whole = await context.client.get<Issue>(`/rest/api/3/issue/${ref.id}`, {
     fields: [...new Set(['summary', 'description', 'status', 'priority', 'assignee', 'parent', 'issuetype', 'updated', 'created', ...fieldsOf(connection, board).map((pair) => pair.jira)])].join(','),
   });
   const typePairs = fieldsFor(fieldsOf(connection, board), whole.fields.issuetype?.name ?? '');
   const bundles = bundlesOf(typePairs);
-  const pairs = partPairs(typePairs, bundles);
+  const typedPairs = partPairs(typePairs, bundles);
   const issue = splitIssue(whole, bundles, board).issue;
   const people = peopleFor(context, false);
   const carried = new Set(backlog.tasks().flatMap((other) => (heldOf(other) ? [heldOf(other)!.id] : [])));
-  const intended = intendFields(connection, board, issue, task.type, pairs, people, { mention: () => null, media: () => null }, carried, await prioritiesOf(context)).fields;
+  const reading = intendFields(connection, board, issue, task.type, typedPairs, people, { mention: () => null, media: () => null }, carried, await prioritiesOf(context), indexFromBacklog(heldNow));
+  const intended = reading.fields;
+  const pairs = pairsHeld(typedPairs, issue);
   const digest: Record<string, string> = { type: short(task.type) };
   const remote: Record<string, string> = {};
   const differs: string[] = [];

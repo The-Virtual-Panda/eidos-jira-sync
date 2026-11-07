@@ -179,6 +179,8 @@ function carries(kind: Kind, eidos: string, board: BoardSettings): string | null
       return want(['user', 'users'], 'the assignee');
     case 'milestone':
       return want(['sprint', 'option', 'text'], 'the milestone');
+    case 'sprint':
+      return kind === 'sprint' ? null : `a ${kind} field is not carried into the sprint; only Jira's sprint field is`;
     case 'parent':
       return want(['parent'], 'the parent');
     case 'dependencies':
@@ -207,7 +209,7 @@ function carries(kind: Kind, eidos: string, board: BoardSettings): string | null
 
 function targetKnown(eidos: string, board: BoardSettings): string | null {
   const [head, name = ''] = eidos.split(/:(.*)/s);
-  if (['title', 'status', 'priority', 'assignee', 'milestone', 'parent', 'dependencies'].includes(eidos)) return null;
+  if (['title', 'status', 'priority', 'assignee', 'milestone', 'parent', 'dependencies', 'sprint'].includes(eidos)) return null;
   if (head === 'property') return board.properties.some((held) => same(held.name, name)) ? null : `no task property '${name}' is declared (eidos backlog configure:property adds one)`;
   if (head === 'section') {
     const keys = new Set([...board.sections, ...board.types.flatMap((type) => type.sections)].map((section) => section.key));
@@ -245,6 +247,9 @@ export function checkMapping(connection: Connection, board: BoardSettings, descr
     }
     const why = carries(kindOf(field, pair.jira), pair.eidos, board);
     if (why) out.push({ code: 'pair-type', message: `${at('field', pair)}: ${why}; change the pair` });
+    if (pair.eidos === 'sprint' && connection.board === undefined) out.push({ code: 'pair-type', message: `${at('field', pair)}: a sprint belongs to a board, and this connection names none` });
+    if (pair.eidos === 'sprint' && board.properties.some((property) => property.name === 'sprint'))
+      out.push({ code: 'pair-type', message: `${at('field', pair)}: a task property named sprint holds that key; eidos jira sprints ${connection.name} moves it` });
     if (field?.allowed && pair.eidos.startsWith('property:')) {
       const property = board.properties.find((held) => same(held.name, pair.eidos.slice('property:'.length)));
       const missing = property?.options ? field.allowed.filter((value) => !property.options!.some((option) => same(option, value))) : [];
@@ -317,7 +322,11 @@ export function draftMapping(connection: Connection, board: BoardSettings, descr
   // custom field to a property of the same name whose type holds it
   if (connection.mapping.fields === undefined) {
     for (const pair of defaultFields(board)) entries.push({ part: 'fields', ...pair, why: 'every board has it' });
-    if (description.sprint_field) entries.push({ part: 'fields', jira: description.sprint_field, eidos: 'milestone', why: "the board's sprints, each a milestone" });
+    // a scrum board's sprints are the Backlog's own, where no property holds the key; an older description, and a root with one, keep the milestone
+    if (description.sprint_field) {
+      const own = description.board_type === 'scrum' && !board.properties.some((property) => property.name === 'sprint');
+      entries.push({ part: 'fields', jira: description.sprint_field, eidos: own ? 'sprint' : 'milestone', why: own ? "the board's sprints, run in Jira" : "the board's sprints, each a milestone" });
+    }
     const labels = board.properties.find((property) => ['labels', 'tags'].includes(property.name.toLowerCase()) && property.type.toLowerCase() === 'list');
     if (labels) entries.push({ part: 'fields', jira: 'labels', eidos: `property:${labels.name}`, why: 'a List property of that name' });
     for (const field of allFields(description)) {
@@ -375,7 +384,7 @@ export interface MappingChoice {
 
 function targetsOf(kind: Kind, board: BoardSettings): string[] {
   const sections = [...new Set([...board.sections, ...board.types.flatMap((type) => type.sections)].filter((section) => section.type !== 'links').map((section) => `section:${section.key}`))];
-  const all = ['title', 'status', 'priority', 'assignee', 'milestone', 'parent', ...sections, ...board.properties.map((property) => `property:${property.name}`)];
+  const all = ['title', 'status', 'priority', 'assignee', 'milestone', 'sprint', 'parent', ...sections, ...board.properties.map((property) => `property:${property.name}`)];
   return all.filter((eidos) => carries(kind, eidos, board) === null);
 }
 

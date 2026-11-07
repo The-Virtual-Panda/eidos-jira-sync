@@ -101,6 +101,11 @@ export interface FakeState {
   requests: string[];
   // answer the next search with a 429 first
   limitNext: boolean;
+  // the board's sprints, and its type where the test says so
+  sprints: Array<Record<string, unknown>>;
+  boardType?: string;
+  // per issue id, the change histories the bulk changelog answers with
+  changelogs: Map<string, Array<{ created: unknown; items: unknown[] }>>;
 }
 
 function issue(id: string, key: string, fields: Record<string, unknown>, comments: FakeComment[] = []): FakeIssue {
@@ -115,6 +120,8 @@ export function seed(): FakeState {
     writes: [],
     failCreateAfterWrite: false,
     limitNext: false,
+    sprints: [{ id: 7, name: 'Sprint 7', state: 'active', endDate: '2026-11-02T00:00:00.000Z' }],
+    changelogs: new Map(),
     issues: [
       issue('10100', 'ACME-1', { summary: 'Sign-in epic', issuetype: TYPES.epic, status: STATUSES.progress, priority: { name: 'Medium' }, assignee: null, reporter: ADA, labels: [] }),
       issue(
@@ -230,6 +237,8 @@ function shown(held: FakeIssue, fields: string[]): unknown {
 // The JQL the plugin writes, read as far as the fake needs: the project, and an `updated >= "yyyy-MM-dd HH:mm"` in UTC.
 function matches(held: FakeIssue, jql: string, state: FakeState): boolean {
   if (state.hidden.has(held.id)) return false;
+  const ids = /^id in \(([^)]*)\)/i.exec(jql);
+  if (ids) return ids[1]!.split(',').some((id) => id.trim() === held.id);
   if (!/project\s*=\s*"?ACME"?/i.test(jql)) return false;
   const since = /updated\s*>=\s*"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})"/.exec(jql);
   if (since) return new Date(held.fields.updated.replace('+0000', 'Z')).getTime() >= new Date(`${since[1]}T${since[2]}:00Z`).getTime();
@@ -295,7 +304,29 @@ export async function startFakeJira(state: FakeState = seed()): Promise<{ url: s
           { name: 'Cloners', outward: 'clones', inward: 'is cloned by' },
         ],
       });
-    if (path === '/rest/agile/1.0/board/1/sprint') return send(200, { values: [{ id: 7, name: 'Sprint 7', state: 'active', endDate: '2026-11-02T00:00:00.000Z' }], isLast: true });
+    if (path === '/rest/agile/1.0/board/1/sprint') return send(200, { values: state.sprints, isLast: true });
+    if (path === '/rest/agile/1.0/board/1' && state.boardType) return send(200, { id: 1, type: state.boardType });
+    const move = /^\/rest\/agile\/1\.0\/(?:sprint\/(\d+)\/issue|backlog\/issue)$/.exec(path);
+    if (move && request.method === 'POST') {
+      const asked = await body(request);
+      state.writes.push({ method: 'POST', path, body: asked });
+      const sprint = move[1] ? state.sprints.find((held) => held['id'] === Number(move[1])) : null;
+      if (move[1] && sprint?.['state'] === 'closed') return send(400, { errorMessages: ['A closed sprint takes no issues'] });
+      for (const key of asked['issues'] as string[]) {
+        const held = state.issues.find((each) => each.key === key);
+        if (!held) continue;
+        const kept = ((held.fields['customfield_10020'] ?? []) as Array<Record<string, unknown>>).filter((listed) => listed['state'] === 'closed');
+        held.fields['customfield_10020'] = sprint ? [...kept, sprint] : kept;
+        held.fields['updated'] = new Date().toISOString().replace('Z', '+0000');
+      }
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (path === '/rest/api/3/changelog/bulkfetch' && request.method === 'POST') {
+      const asked = await body(request);
+      return send(200, { issueChangeLogs: (asked['issueIdsOrKeys'] as string[]).map((issueId) => ({ issueId, changeHistories: state.changelogs.get(issueId) ?? [] })) });
+    }
     if (path === '/rest/api/3/search/jql' && request.method === 'POST') {
       if (state.limitNext) {
         state.limitNext = false;
@@ -313,7 +344,10 @@ export async function startFakeJira(state: FakeState = seed()): Promise<{ url: s
     }
     if (path === '/rest/api/3/user/assignable/search') {
       const query = (url.searchParams.get('query') ?? '').toLowerCase();
-      return send(200, PEOPLE.filter((person) => person.displayName.toLowerCase().includes(query) || (person.emailAddress ?? '').toLowerCase().includes(query)));
+      return send(
+        200,
+        PEOPLE.filter((person) => person.displayName.toLowerCase().includes(query) || (person.emailAddress ?? '').toLowerCase().includes(query)),
+      );
     }
     if (path === '/rest/api/3/issue' && request.method === 'POST') {
       const asked = await body(request);

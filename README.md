@@ -1,6 +1,6 @@
 # Jira Sync for Eidos MD
 
-Bring your team's Jira board into your Eidos root, and send your work back. Every issue becomes a task in the Backlog, every comment thread comes with it, and your sprints become milestones, so you plan and work next to the blueprints while the board stays where your team keeps it.
+Bring your team's Jira board into your Eidos root, and send your work back. Every issue becomes a task in the Backlog, every comment thread comes with it, and your sprints come with them, so you plan and work next to the blueprints while the board stays where your team keeps it.
 
 - **See it before it lands.** A fetch shows what changed in Jira since your last pull and writes nothing. A pull brings it in.
 - **Your mapping, your words.** Jira's statuses, issue types, priorities, and fields map onto your Backlog's, on a mapping page of their own. The plugin drafts the mapping and you change any entry.
@@ -118,7 +118,7 @@ Both run only while the app has the root open, only for tasks edited here, never
 - **Tasks keyed by their issue.** `ACME-123` becomes `T-ACME-123`, so two people pulling the same board on two branches write the same file. A Jira sub-task becomes a subtask of its parent's task. The issue's link lives in the task's frontmatter under `jira`; leave that key to the plugin.
 - **Comment threads.** One thread per issue, each comment signed by its author with Jira's date. Edits and deletions in Jira follow on the next pull. Comments restricted to a role or a group stay in Jira unless the connection sets `restricted_comments: true`.
 - **People.** An assignee, a comment's author, or a mention is written as the root user of the same name where your root has one, and as their Jira name otherwise.
-- **Sprints as milestones**, dated when the sprint ends.
+- **Sprints as Backlog sprints**, for a scrum board: the Board, Planning, and each closed sprint's report, with Jira still where a sprint is started and closed. An older connection keeping them as milestones moves with `eidos jira sprints <connection>`.
 - **Attachments** are links to Jira, or downloaded through the Assets plugin when you turn on **Download attachments**, into its first asset folder or the one you pick under **Attachments folder** (a folder of their own, if the root declares one). A downloaded image shows in place.
 - **Nothing is deleted.** An issue that leaves the board keeps its task, marked as gone, and comes back if it returns.
 

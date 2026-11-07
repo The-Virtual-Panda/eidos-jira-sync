@@ -30,6 +30,7 @@ import {
   heldValue,
   intendFields,
   intendedValue,
+  pairsHeld,
   moment,
   normalise,
   peopleFor,
@@ -42,6 +43,7 @@ import {
   type Issue,
   type JiraUser,
 } from './pull.ts';
+import { carriesSprints, heldSprints, holdFor, indexFromBacklog, readBoardSprints, SPRINT_SIDE, sprintNames, type SprintIndex } from './sprints.ts';
 import type { BacklogApi, BoardSettings, TaskFields, TaskView, ThreadView } from './types.ts';
 
 // ---- the plan ---------------------------------------------------------------------
@@ -592,6 +594,12 @@ export function taskFor(backlog: BacklogApi, ref: string): TaskView {
   return found;
 }
 
+// The board's sprints as the Backlog holds them, where the connection carries them as its own: no request to Jira.
+function sprintsHeld(context: Context, pairs: Pair[]): SprintIndex | undefined {
+  if (!carriesSprints(pairs) || !context.backlog.sprints) return undefined;
+  return indexFromBacklog(context.backlog.sprints(context.connection.backlog_board ? { board: context.connection.backlog_board } : {}));
+}
+
 export async function prepare(context: Context, task: TaskView, options: SyncOptions = {}): Promise<Prepared> {
   const { connection, backlog } = context;
   if (skipOf(task)) throw new SyncRefused(`${task.id ?? task.name} is marked Don't sync; eidos jira skip ${task.id ?? task.name} --off syncs it again`);
@@ -611,14 +619,16 @@ export async function prepare(context: Context, task: TaskView, options: SyncOpt
   if (type === null) throw new SyncRefused(`${read.issue.key} is a ${jiraType}, a type ${connection.name}'s mapping does not carry`);
   const typePairs = fieldsFor(pairs, jiraType);
   const bundles = bundlesOf(typePairs);
-  const issuePairs = partPairs(typePairs, bundles);
+  const typedPairs = partPairs(typePairs, bundles);
   const split = splitIssue(fetched, bundles, board);
   read.issue = split.issue;
   const people = peopleFor(context, false);
   const adf = adfFor(context, read.issue, task, people);
   // a parent counts as carried when its task is here, so the parent pair reads as a pull does
   const carried = new Set(backlog.tasks().flatMap((other) => (heldOf(other) ? [heldOf(other)!.id] : [])));
-  const intended = intendFields(connection, board, read.issue, type, issuePairs, people, adf, carried, ranks);
+  const sprints = sprintsHeld(context, pairs);
+  const intended = intendFields(connection, board, read.issue, type, typedPairs, people, adf, carried, ranks, sprints);
+  const issuePairs = pairsHeld(typedPairs, read.issue);
   const parentTask = intended.parentIssue ? backlog.tasks().find((other) => heldOf(other)?.id === intended.parentIssue) : undefined;
   const intendedNow: TaskFields = { ...intended.fields, parent: parentTask ? (parentTask.id ?? parentTask.name) : null };
   const editmeta = read.issue.editmeta?.fields ?? {};
@@ -803,8 +813,25 @@ export function copySide(target: TaskFields, from: TaskFields, side: string): vo
   const [head, name = ''] = side.split(/:(.*)/s);
   if (head === 'section') target.sections = { ...(target.sections ?? {}), [name]: from.sections?.[name] ?? '' };
   else if (head === 'property') target.properties = { ...(target.properties ?? {}), [name]: from.properties?.[name] ?? null };
-  else if (head === 'title' || head === 'type' || head === 'status' || head === 'priority' || head === 'assignee' || head === 'milestone' || head === 'parent')
+  else if (head === 'title' || head === 'type' || head === 'status' || head === 'priority' || head === 'assignee' || head === 'milestone' || head === 'sprint' || head === 'parent')
     (target as Record<string, unknown>)[head] = (from as Record<string, unknown>)[head] ?? null;
+}
+
+// A task's sprint as a sync sends it (Jira Sync REQ21): the Jira sprint's id, or null for Jira's backlog; moved with the Agile API rather than an edit.
+function sprintOut(context: Context, localValue: unknown, side: string): Outgoing {
+  const name = typeof localValue === 'string' && localValue.trim() !== '' ? localValue.trim() : null;
+  if (name === null) return { value: null };
+  const held = (context.backlog.sprints?.(context.connection.backlog_board ? { board: context.connection.backlog_board } : {}) ?? []).find(
+    (sprint) => sprint.name.toLowerCase() === name.toLowerCase(),
+  );
+  if (!held?.source) return { blocker: { side, code: 'value', message: `${name} is not a sprint on the Jira board`, fix: "put the task in one of the board's Jira sprints, or take it out" } };
+  if (held.state === 'closed') return { kept: 'Jira takes nothing into a closed sprint' };
+  return { value: Number(held.source) };
+}
+
+// One issue moved to a sprint, or to Jira's backlog.
+export async function moveToSprint(context: Pick<Context, 'client'>, key: string, sprint: number | null): Promise<void> {
+  await context.client.post(sprint === null ? '/rest/agile/1.0/backlog/issue' : `/rest/agile/1.0/sprint/${sprint}/issue`, { issues: [key] });
 }
 
 async function outgoingFor(
@@ -828,6 +855,7 @@ async function outgoingFor(
   if (head === 'type') return { kept: "a Jira issue's type is changed by moving it in Jira" };
   if (head === 'parent') return { kept: "a Jira issue's parent is changed in Jira" };
   if (head === 'milestone') return { kept: 'a sprint is planned on the Jira board' };
+  if (head === 'sprint') return sprintOut(context, localValue, side);
   const field = editmeta[pair.jira];
   if (!field) return { kept: `${pair.jira} is not on ${read.issue.key}'s edit screen in Jira` };
   if (head === 'priority') return priorityOut(context, board, field, read.issue.fields.priority, (localValue as string | null) ?? null, side, ranks);
@@ -869,6 +897,16 @@ export async function apply(context: Context, prepared: Prepared): Promise<SyncD
       remote[side] = remoteOf(issue, pair);
     }
   };
+  // a sprint Jira made since the last pull, named by what came from Jira, is held before the task names it
+  if (
+    prepared.fromJira.sprint &&
+    !(backlog.sprints?.(context.connection.backlog_board ? { board: context.connection.backlog_board } : {}) ?? []).some((sprint) => sprint.name === prepared.fromJira.sprint) &&
+    context.connection.board !== undefined
+  ) {
+    const sprints = await readBoardSprints(client, context.connection.board);
+    const names = sprintNames(sprints);
+    await backlog.holdSprints!(holdFor(context.connection), heldSprints(sprints, names), context.connection.backlog_board ? { board: context.connection.backlog_board } : {});
+  }
   let written = backlog.set(name, { ...prepared.fromJira, tool: { jira: { ...held } } });
   settle(written, [...prepared.pulledSides, ...prepared.sameSides], read.issue);
   written = backlog.set(name, { tool: { jira: { ...held, digest: sorted(digest), remote: sorted(remote) } } });
@@ -895,10 +933,16 @@ export async function apply(context: Context, prepared: Prepared): Promise<SyncD
   }
 
   // 3. Jira: the fields in one edit, then the status hop by hop, then the person's messages
-  if (outgoing.size > 0) {
-    const fields = Object.fromEntries([...outgoing.values()].map((out) => [out.jira, out.value]));
+  const edits = [...outgoing].filter(([side]) => side !== SPRINT_SIDE);
+  if (edits.length > 0) {
+    const fields = Object.fromEntries(edits.map(([, out]) => [out.jira, out.value]));
     await client.put(`/rest/api/3/issue/${encodeURIComponent(held.id)}`, { fields });
-    done.to_jira.push(...outgoing.keys());
+    done.to_jira.push(...edits.map(([side]) => side));
+  }
+  const sprintMove = outgoing.get(SPRINT_SIDE);
+  if (sprintMove) {
+    await moveToSprint(context, plan.key, sprintMove.value as number | null);
+    done.to_jira.push(SPRINT_SIDE);
   }
   if (plan.status) {
     for (const [at, target] of plan.status.path.entries()) {
@@ -940,7 +984,7 @@ export async function apply(context: Context, prepared: Prepared): Promise<SyncD
   const people = peopleFor(context, false);
   const adf = adfFor(context, after, written, people);
   const carried = new Set(backlog.tasks().flatMap((other) => (heldOf(other) ? [heldOf(other)!.id] : [])));
-  const intendedAfter = intendFields(context.connection, board, after, written.type, pairs, people, adf, carried, prepared.ranks).fields;
+  const intendedAfter = intendFields(context.connection, board, after, written.type, pairs, people, adf, carried, prepared.ranks, sprintsHeld(context, pairs)).fields;
   written = backlog.get(name);
   const settledSides: string[] = [];
   for (const side of done.to_jira) {

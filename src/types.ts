@@ -4,6 +4,50 @@
 // `host.plugin(name)`, are described here as far as it uses them.
 export type StatusCategory = 'todo' | 'in_progress' | 'done';
 
+// A board's sprints held for this plugin (Backlog Sprints REQ15).
+export interface SprintHold {
+  tool: string;
+  title: string;
+  url: string | null;
+}
+export interface SprintTask {
+  id: string;
+  title: string;
+}
+export interface SprintResult {
+  committed: SprintTask[];
+  added: SprintTask[];
+  removed: SprintTask[];
+  completed: SprintTask[];
+  carried: SprintTask[];
+  carried_to: string | null;
+}
+export interface HeldSprint {
+  id: string;
+  name: string;
+  state: 'planned' | 'active' | 'closed';
+  goal?: string | null;
+  start?: string | null;
+  end?: string | null;
+  started?: string | null;
+  closed?: string | null;
+  committed?: SprintTask[];
+  result?: SprintResult | null;
+}
+export interface SprintsHeld {
+  added: string[];
+  changed: string[];
+  renamed: Array<{ from: string; to: string }>;
+  removed: Array<{ name: string; tasks: string[] }>;
+}
+export interface SprintView {
+  name: string;
+  state: 'planned' | 'active' | 'closed';
+  source: string | null;
+  committed: SprintTask[];
+  result: SprintResult | null;
+}
+
 // A change to the Backlog's lists (Backlog REQ20): each list as it is to be, and for a value leaving it a rename or where its tasks move.
 export interface Reshape {
   statuses?: {
@@ -76,6 +120,8 @@ export interface TaskView {
   status: string | null;
   assignee: string[];
   milestone: string | null;
+  // the sprint it is in, by name; a subtask reads its top task's; absent on a host from before sprints
+  sprint?: string | null;
   priority: string | null;
   parent: string | null;
   updated: string | null;
@@ -91,6 +137,7 @@ export interface TaskFields {
   status?: string | null;
   assignee?: string[];
   milestone?: string | null;
+  sprint?: string | null;
   priority?: string | null;
   parent?: string | null;
   properties?: Record<string, unknown>;
@@ -121,6 +168,12 @@ export interface BacklogApi {
     options?: { existing?: { name: string; title?: string; folder?: string | null }; dryRun?: boolean },
   ): Promise<{ board: Board; existing: Board | null }>;
   setBoard?(name: string, changes: BoardChanges, options?: { dryRun?: boolean }): Promise<{ board: Board }>;
+  // sprints held for a tool (Backlog Sprints REQ15, from the Eidos MD release after 0.20.1)
+  sprints?(filter?: { board?: string }): SprintView[];
+  holdSprints?(hold: SprintHold, sprints: HeldSprint[], options?: { board?: string; dryRun?: boolean }): Promise<SprintsHeld>;
+  releaseSprints?(tool: string, options?: { board?: string }): Promise<void>;
+  freeSprintKey?(options?: { dryRun?: boolean }): Promise<{ tasks: string[] }>;
+  removeMilestone?(name: string, options?: { clearTasks?: boolean }): Promise<unknown>;
 }
 
 export interface Author {
