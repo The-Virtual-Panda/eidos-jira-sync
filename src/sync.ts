@@ -248,8 +248,8 @@ export function priorityOut(context: Context, board: BoardSettings, field: EditF
       // a priorities part names every priority a pull carries, so one is marked only once the part is whole
       fix:
         context.connection.mapping.priorities === undefined
-          ? `eidos jira map ${context.connection.name} drafts the priorities part; then eidos jira configure:map ${context.connection.name} set priorities "<${names.join(' | ') || 'Jira priority'}>" ${wanted} --push`
-          : `eidos jira configure:map ${context.connection.name} set priorities "<${names.join(' | ') || 'Jira priority'}>" ${wanted} --push`,
+          ? `eidos jira-sync map ${context.connection.name} drafts the priorities part; then eidos jira-sync configure:map ${context.connection.name} set priorities "<${names.join(' | ') || 'Jira priority'}>" ${wanted} --push`
+          : `eidos jira-sync configure:map ${context.connection.name} set priorities "<${names.join(' | ') || 'Jira priority'}>" ${wanted} --push`,
     },
   };
 }
@@ -276,7 +276,7 @@ export async function accountFor(context: Context, scope: { issueKey: string } |
       side,
       code: 'person',
       message: exact.length === 0 ? `no one Jira can assign ${where} to is called ${query}` : `${exact.length} people Jira can assign ${where} to are called ${query}`,
-      fix: `eidos jira configure:map ${context.connection.name} set users "<their Jira email or account id>" ${person}`,
+      fix: `eidos jira-sync configure:map ${context.connection.name} set users "<their Jira email or account id>" ${person}`,
     },
   };
 }
@@ -376,7 +376,7 @@ function statusOut(context: Context, board: BoardSettings, read: Read, wanted: s
         side,
         code: 'unmapped',
         message: `no Jira status of ${read.type?.name ?? 'this issue type'} reads as ${wanted}`,
-        fix: `eidos jira configure:map ${name} set statuses "<Jira status>" "${wanted}", or take Jira's status (--take status=jira)`,
+        fix: `eidos jira-sync configure:map ${name} set statuses "<Jira status>" "${wanted}", or take Jira's status (--take status=jira)`,
       },
     };
   const preferred = options.statusTo ?? context.connection.mapping.statuses?.find((pair) => pair.push === true && same(pair.eidos, wanted))?.jira;
@@ -410,7 +410,7 @@ function statusOut(context: Context, board: BoardSettings, read: Read, wanted: s
           side,
           code: 'ambiguous',
           message: `${wanted} is ${targets.join(' or ')} in Jira`,
-          fix: `--status-to "<one of ${targets.join(', ')}>", or eidos jira configure:map ${name} set statuses "<Jira status>" "${wanted}" --push`,
+          fix: `--status-to "<one of ${targets.join(', ')}>", or eidos jira-sync configure:map ${name} set statuses "<Jira status>" "${wanted}" --push`,
           ask: { kind: 'status_to', choices: targets },
         },
       };
@@ -432,7 +432,7 @@ function statusOut(context: Context, board: BoardSettings, read: Read, wanted: s
         side,
         code: 'ambiguous',
         message: `${wanted} is ${targets.join(' or ')} in Jira; from ${current} the sync can go to ${names.join(' or ')}`,
-        fix: `--status-to "<one of ${names.join(', ')}>", or eidos jira configure:map ${name} set statuses "<Jira status>" "${wanted}" --push to settle it for every sync`,
+        fix: `--status-to "<one of ${names.join(', ')}>", or eidos jira-sync configure:map ${name} set statuses "<Jira status>" "${wanted}" --push to settle it for every sync`,
         ask: { kind: 'status_to', choices: names },
       },
     };
@@ -493,7 +493,7 @@ function transitionValues(context: Context, hop: Transition, options: SyncOption
             code: 'required',
             message: `the transition to ${hop.to.name} asks for ${field.name ?? id}`,
             ask: { kind: 'field', field: id, choices: allowed.filter((value): value is string => typeof value === 'string') },
-            fix: `--field ${id}="<${allowed.length > 0 ? allowed.join(' | ') : 'value'}>", or eidos jira configure:map ${context.connection.name} set transition_fields "${hop.to.name}" ${id}="<value>"`,
+            fix: `--field ${id}="<${allowed.length > 0 ? allowed.join(' | ') : 'value'}>", or eidos jira-sync configure:map ${context.connection.name} set transition_fields "${hop.to.name}" ${id}="<value>"`,
           },
         };
       }
@@ -602,11 +602,11 @@ function sprintsHeld(context: Context, pairs: Pair[]): SprintIndex | undefined {
 
 export async function prepare(context: Context, task: TaskView, options: SyncOptions = {}): Promise<Prepared> {
   const { connection, backlog } = context;
-  if (skipOf(task)) throw new SyncRefused(`${task.id ?? task.name} is marked Don't sync; eidos jira skip ${task.id ?? task.name} --off syncs it again`);
+  if (skipOf(task)) throw new SyncRefused(`${task.id ?? task.name} is marked Don't sync; eidos jira-sync skip ${task.id ?? task.name} --off syncs it again`);
   const held = heldOf(task);
-  if (!held) throw new SyncRefused(`${task.id ?? task.name} holds no Jira issue; eidos jira create makes one from it`);
+  if (!held) throw new SyncRefused(`${task.id ?? task.name} holds no Jira issue; eidos jira-sync create makes one from it`);
   if (siteKey(held.site) !== siteKey(connection.site)) throw new SyncRefused(`${task.id ?? task.name} holds an issue on ${held.site}, not ${connection.name}'s site`);
-  if (held.pending) throw new SyncRefused(`${task.id ?? task.name} is waiting on a create that did not finish; eidos jira create ${task.id ?? task.name} finds its issue`);
+  if (held.pending) throw new SyncRefused(`${task.id ?? task.name} is waiting on a create that did not finish; eidos jira-sync create ${task.id ?? task.name} finds its issue`);
   const board = settingsFor(backlog, connection);
   const pairs = fieldsOf(connection, board);
   const fetched = await readIssue(context, held.id, pairs);
@@ -907,9 +907,9 @@ export async function apply(context: Context, prepared: Prepared): Promise<SyncD
     const names = sprintNames(sprints);
     await backlog.holdSprints!(holdFor(context.connection), heldSprints(sprints, names), context.connection.backlog_board ? { board: context.connection.backlog_board } : {});
   }
-  let written = backlog.set(name, { ...prepared.fromJira, tool: { jira: { ...held } } });
+  let written = backlog.set(name, { ...prepared.fromJira, tool: { 'jira-sync': { ...held } } });
   settle(written, [...prepared.pulledSides, ...prepared.sameSides], read.issue);
-  written = backlog.set(name, { tool: { jira: { ...held, digest: sorted(digest), remote: sorted(remote) } } });
+  written = backlog.set(name, { tool: { 'jira-sync': { ...held, digest: sorted(digest), remote: sorted(remote) } } });
 
   if (steps.length === 0) return done;
 
@@ -1002,7 +1002,7 @@ export async function apply(context: Context, prepared: Prepared): Promise<SyncD
   }
   // the pull's own `updated` is kept as it was: a later pull still reads the issue, since what others changed alongside
   // this sync (a comment, a link) is the pull's to bring in, and finds the fields this sync settled level
-  backlog.set(name, { tool: { jira: { ...heldOf(written)!, key: after.key, ...(held.updated ? { updated: held.updated } : {}), digest: sorted(digest), remote: sorted(remote) } } });
+  backlog.set(name, { tool: { 'jira-sync': { ...heldOf(written)!, key: after.key, ...(held.updated ? { updated: held.updated } : {}), digest: sorted(digest), remote: sorted(remote) } } });
   rmSync(journalFile(context.host.workspace, held.id), { force: true });
   return done;
 }
@@ -1072,7 +1072,7 @@ export async function sendComment(context: Context, task: TaskView, text: string
 }
 
 // The tasks of a connection edited in the root since their last pull or sync, read from the tasks alone (no request to
-// Jira): what `eidos jira status` lists and `sync --connection` walks.
+// Jira): what `eidos jira-sync status` lists and `sync --connection` walks.
 export function editedHere(context: Pick<Context, 'backlog' | 'connection'>): Array<{ task: string; key: string; sides: string[] }> {
   const board = settingsFor(context.backlog, context.connection);
   const pairs = fieldsOf(context.connection, board);

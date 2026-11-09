@@ -21,7 +21,7 @@ Needs Eidos MD 0.21.0 or later.
 2. **Sign in.** Make a classic API token at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) (**Create API token**, not the one with scopes). Then sign in on the plugin's settings page (**Settings → Community plugins → Jira Sync**), or in a terminal in your root:
 
    ```bash
-   eidos jira login your-site.atlassian.net
+   eidos jira-sync login your-site.atlassian.net
    ```
 
    The token is kept only once Jira accepts it.
@@ -29,13 +29,13 @@ Needs Eidos MD 0.21.0 or later.
 3. **Connect a board.** Paste the board's address (`…/projects/ACME/boards/12`) under **Boards** on the settings page, or:
 
    ```bash
-   eidos jira connect acme --site your-site.atlassian.net --key ACME --board 12
+   eidos jira-sync connect acme --site your-site.atlassian.net --key ACME --board 12
    ```
 
-4. **Map it.** **Edit mapping** opens the board's mapping page: each Jira status, issue type, priority, and link type with the Backlog value it maps to, and each issue type's fields with where they land. From the terminal, `eidos jira describe acme` then `eidos jira map acme`. Your Backlog doesn't have Jira's statuses, types, or priorities yet? See [Match the Backlog to Jira](#match-the-backlog-to-jira).
-5. **Fetch, then pull**, from the Jira Sync sidebar in the Activity Bar, or `eidos jira fetch` and `eidos jira pull`.
+4. **Map it.** **Edit mapping** opens the board's mapping page: each Jira status, issue type, priority, and link type with the Backlog value it maps to, and each issue type's fields with where they land. From the terminal, `eidos jira-sync describe acme` then `eidos jira-sync map acme`. Your Backlog doesn't have Jira's statuses, types, or priorities yet? See [Match the Backlog to Jira](#match-the-backlog-to-jira).
+5. **Fetch, then pull**, from the Jira Sync sidebar in the Activity Bar, or `eidos jira-sync fetch` and `eidos jira-sync pull`.
 
-`eidos instructions jira` prints the full guide, every command with its `--json` output, for you or an AI agent working in the root.
+`eidos instructions jira-sync` prints the full guide, every command with its `--json` output, for you or an AI agent working in the root.
 
 ## Work a ticket
 
@@ -46,8 +46,8 @@ The sync review shows each field that moves: `←` from Jira, `→` to Jira, `!`
 From the terminal:
 
 ```bash
-eidos jira status
-eidos jira sync T-ACME-123 --dry-run
+eidos jira-sync status
+eidos jira-sync sync T-ACME-123 --dry-run
 ```
 
 then the same without `--dry-run` to confirm (or `--yes` from a script).
@@ -55,14 +55,14 @@ then the same without `--dry-run` to confirm (or `--yes` from a script).
 - **Conflicts are yours to settle.** A field changed in both places stops that ticket until you pick a side (`--take status=eidos`), or a section is merged (`--take section:acceptance-criteria=both`, every conflict kept from both sides).
 - **Statuses go through your workflow.** A sync uses Jira's transitions, asks for what a transition screen needs, and never picks between statuses your mapping folds together without you (`--status-to`, `--via`, `--field resolution=Done`).
 - **Rich text survives.** A description goes back with every paragraph you did not touch exactly as Jira holds it, panels, mentions, and screenshots included. A rewrite that would drop one says so and waits for you (`--accept-loss`).
-- **Only your comments.** New replies you write in the issue's thread are sent as your account; nobody else's are. `eidos jira comment T-ACME-123 "…"` comments on a ticket with no thread yet.
+- **Only your comments.** New replies you write in the issue's thread are sent as your account; nobody else's are. `eidos jira-sync comment T-ACME-123 "…"` comments on a ticket with no thread yet.
 - **Owned fields.** Mark a field as Eidos's (`--owner eidos` on its pair) and a pull never overwrites it; a change made to it in Jira becomes a conflict at the next sync.
-- **Don't sync.** The switch on the task's panel, or `eidos jira skip T-ACME-123` (`--off` to undo): no pull writes the task and nothing of it goes to Jira.
+- **Don't sync.** The switch on the task's panel, or `eidos jira-sync skip T-ACME-123` (`--off` to undo): no pull writes the task and nothing of it goes to Jira.
 
 To make a ticket from a task, **Create in Jira…** on its panel, or:
 
 ```bash
-eidos jira create T-12 --connection acme --type Story
+eidos jira-sync create T-12 --connection acme --type Story
 ```
 
 It shows the plan first and makes nothing while something stops it. A create cut short is found again by a mark on the issue, never made twice.
@@ -77,8 +77,8 @@ The mapping page's **Match the Backlog to Jira…** makes the Backlog's statuses
 You see the whole change first: each list after it, and every task that changes, from what to what. A rename or a removal rewrites those tasks' files (their dates are kept), so the review warns you with how many, and Replace asks once more. Afterwards the mapping pairs each Jira value with its namesake. **Make changes with AI** asks the AI Agent instead, in a conversation of its own, with both sides' lists, and it changes nothing you have not accepted. From the terminal:
 
 ```bash
-eidos jira match acme --dry-run
-eidos jira match acme --replace
+eidos jira-sync match acme --dry-run
+eidos jira-sync match acme --replace
 ```
 
 ## A board of its own
@@ -86,8 +86,8 @@ eidos jira match acme --replace
 With several Jira boards, give each its own board in the Backlog, so each keeps its own workflow instead of being mapped onto one. On the settings page, pick a connection's **Backlog board**: one your Backlog has, or **A board of its own**, named after the Jira board. If your Backlog has no boards yet, you're asked what to call the board you have now, which keeps every task already there; the new board starts empty, and you can move the tasks the connection already pulled onto it. From then on a pull lands its issues there, and **Match the Backlog to Jira** changes that board alone: Jira's statuses and types are added to the project's, the board uses exactly Jira's workflow and columns, and no other board changes. Turn on `own_board` to give every board you connect from now on a board of its own.
 
 ```bash
-eidos jira configure:connection set acme --own-board --existing product --move-tasks
-eidos jira match acme --replace
+eidos jira-sync configure:connection set acme --own-board --existing product --move-tasks
+eidos jira-sync match acme --replace
 ```
 
 ## Several sections in one field
@@ -95,7 +95,7 @@ eidos jira match acme --replace
 On the mapping page, under **Fields**, a rich-text field mapped to a section (the description) has **Add a section**: add Acceptance Criteria and Jira holds both as one text, the description, then `## Acceptance Criteria` with each criterion a checkbox. From the terminal:
 
 ```bash
-eidos jira configure:map acme set fields description section:acceptance-criteria --also
+eidos jira-sync configure:map acme set fields description section:acceptance-criteria --also
 ```
 
 A pull splits Jira's text at those headings, each part back to its section; a section Jira's text has no heading for (an issue written in Jira) is left as you have it, and the next sync sends it. Each section syncs on its own, so an edit to the criteria here and to the description in Jira is no conflict. A section mapped nowhere (Implementation Plan, Implementation Notes) never goes to Jira.
@@ -111,10 +111,10 @@ Both run only while the app has the root open, only for tasks edited here, never
 
 ## What a pull writes
 
-- **Tasks keyed by their issue.** `ACME-123` becomes `T-ACME-123`, so two people pulling the same board on two branches write the same file. A Jira sub-task becomes a subtask of its parent's task. The issue's link lives in the task's frontmatter under `jira`; leave that key to the plugin.
+- **Tasks keyed by their issue.** `ACME-123` becomes `T-ACME-123`, so two people pulling the same board on two branches write the same file. A Jira sub-task becomes a subtask of its parent's task. The issue's link lives in the task's frontmatter under `jira-sync`; leave that key to the plugin.
 - **Comment threads.** One thread per issue, each comment signed by its author with Jira's date. Edits and deletions in Jira follow on the next pull. Comments restricted to a role or a group stay in Jira unless the connection sets `restricted_comments: true`.
 - **People.** An assignee, a comment's author, or a mention is written as the root user of the same name where your root has one, and as their Jira name otherwise.
-- **Sprints as Backlog sprints**, for a scrum board: the Board, Planning, and each closed sprint's report, with Jira still where a sprint is started and closed. An older connection keeping them as milestones moves with `eidos jira sprints <connection>`.
+- **Sprints as Backlog sprints**, for a scrum board: the Board, Planning, and each closed sprint's report, with Jira still where a sprint is started and closed. An older connection keeping them as milestones moves with `eidos jira-sync sprints <connection>`.
 - **Attachments** are links to Jira, or downloaded through the Assets plugin when you turn on **Download attachments**, into its first asset folder or the one you pick under **Attachments folder** (a folder of their own, if the root declares one). A downloaded image shows in place.
 - **Nothing is deleted.** An issue that leaves the board keeps its task, marked as gone, and comes back if it returns.
 
@@ -131,13 +131,13 @@ Both run only while the app has the root open, only for tasks edited here, never
 | `auto_sync_on_save`  | yours                | Sync a task edited here a few seconds after its last save.                                      |
 | `auto_sync_on_push`  | yours                | Sync every task edited here once the app pushes.                                                |
 
-Set one on the settings page, or with `eidos plugin set jira <setting> <value>`.
+Set one on the settings page, or with `eidos plugin set jira-sync <setting> <value>`.
 
 ## Your sign-ins
 
-Your API token is kept in one file on your machine, `plugins/jira/credentials.json` in the Eidos app data folder, readable only by you. It never goes into a root, a settings file, a log, or a commit. In a script, set `JIRA_EMAIL` and `JIRA_API_TOKEN` instead.
+Your API token is kept in one file on your machine, `plugins/jira-sync/credentials.json` in the Eidos app data folder, readable only by you. It never goes into a root, a settings file, a log, or a commit. In a script, set `JIRA_EMAIL` and `JIRA_API_TOKEN` instead.
 
-It may keep several accounts for a site. Each root uses its own pick or, without one, the default: on the settings page, **Use here** and **Make default** on each account, or `eidos jira use <site> <email> [--global]`. `eidos jira logout <site> --email <email>` signs one account out; without `--email`, all of them.
+It may keep several accounts for a site. Each root uses its own pick or, without one, the default: on the settings page, **Use here** and **Make default** on each account, or `eidos jira-sync use <site> <email> [--global]`. `eidos jira-sync logout <site> --email <email>` signs one account out; without `--email`, all of them.
 
 ## Develop
 

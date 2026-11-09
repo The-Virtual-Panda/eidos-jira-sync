@@ -138,7 +138,7 @@ export function connection(host: Host, name: string): Connection {
   const found = connections(host).find((entry) => entry.name.toLowerCase() === name.trim().toLowerCase());
   if (!found) {
     const names = connections(host).map((entry) => entry.name);
-    throw new ConnectionError(`no Jira connection '${name}' in this root${names.length > 0 ? ` (${names.join(', ')})` : '; eidos jira connect adds one'}`);
+    throw new ConnectionError(`no Jira connection '${name}' in this root${names.length > 0 ? ` (${names.join(', ')})` : '; eidos jira-sync connect adds one'}`);
   }
   return found;
 }
@@ -230,10 +230,10 @@ export function signIn(host: Host, site: string, env: NodeJS.ProcessEnv = proces
 
 export function credentials(host: Host, site: string, env: NodeJS.ProcessEnv = process.env): Credentials {
   const found = signIn(host, site, env);
-  if (!found) throw new SignInError(`nobody is signed in to ${siteKey(site)} here; eidos jira login ${siteKey(site)}`);
+  if (!found) throw new SignInError(`nobody is signed in to ${siteKey(site)} here; eidos jira-sync login ${siteKey(site)}`);
   if (found.scope === 'environment') return { email: found.email, token: env['JIRA_API_TOKEN']!.trim() };
   const token = tokenStore().get(secretKey(site, found.email));
-  if (!token) throw new SignInError(`the token for ${found.email} on ${siteKey(site)} is not in ${tokenStore().where}; eidos jira login ${siteKey(site)}`);
+  if (!token) throw new SignInError(`the token for ${found.email} on ${siteKey(site)} is not in ${tokenStore().where}; eidos jira-sync login ${siteKey(site)}`);
   return { email: found.email, token };
 }
 
@@ -263,7 +263,7 @@ export function heldSignIns(host: Host): Array<{ site: string; email: string; de
 // follows the default).
 export async function useSignIn(host: Host, site: string, email: string, global: boolean): Promise<void> {
   const key = siteKey(site);
-  if (!tokenStore().get(secretKey(site, email))) throw new ConnectionError(`no token for ${email} on ${key} is kept here; eidos jira login ${key} --email ${email}`);
+  if (!tokenStore().get(secretKey(site, email))) throw new ConnectionError(`no token for ${email} on ${key} is kept here; eidos jira-sync login ${key} --email ${email}`);
   const root = rootAccounts(host);
   if (global) {
     tokenStore().setAccount(key, email);

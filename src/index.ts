@@ -1,5 +1,5 @@
-// The Jira plugin's CLI entry (Jira, Jira Pull): `eidos jira` and its
-// commands, the `jira/<code>` findings `eidos check` reports, the timer that
+// The Jira plugin's CLI entry (Jira, Jira Pull): `eidos jira-sync` and its
+// commands, the `jira-sync/<code>` findings `eidos check` reports, the timer that
 // fetches on its own where the app's server runs it, and the API the app's
 // half answers through. Built as a CommonJS bundle whose one import from the
 // CLI is `eidosmd/plugin`.
@@ -66,7 +66,7 @@ async function letSprintsGo(host: Host, was: Connection): Promise<void> {
   const pairs = (held: Connection): Pair[] => fieldsOf(held, settingsFor(backlog, held));
   if (!carriesSprints(was.mapping.fields ?? []) || !backlog.releaseSprints) return;
   const still = connections(host).some((held) => held.backlog_board === was.backlog_board && carriesSprints(pairs(held)));
-  if (!still) await backlog.releaseSprints('jira', was.backlog_board ? { board: was.backlog_board } : {});
+  if (!still) await backlog.releaseSprints('jira-sync', was.backlog_board ? { board: was.backlog_board } : {});
 }
 
 export interface SprintMovePlan {
@@ -208,10 +208,10 @@ export interface SignInRow {
   scope: Scope | null;
 }
 
-const SETTINGS_PATH = '.eidos/plugins/jira/settings.yaml';
+const SETTINGS_PATH = '.eidos/plugins/jira-sync/settings.yaml';
 
 function fail(error: unknown): void {
-  process.stderr.write(`eidos jira: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`eidos jira-sync: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
 }
 
@@ -257,11 +257,11 @@ async function contextFor(host: Host, connection: Connection, given?: Credential
 // The connection a linked task syncs through: the one that made its issue, else the one over its issue's project and site.
 function connectionOfTask(host: Host, task: TaskView): Connection {
   const held = heldOf(task);
-  if (!held) throw new SyncRefused(`${task.id ?? task.name} holds no Jira issue; eidos jira create <task> --connection <name> makes one`);
+  if (!held) throw new SyncRefused(`${task.id ?? task.name} holds no Jira issue; eidos jira-sync create <task> --connection <name> makes one`);
   if (held.connection) return connectionNamed(host, held.connection);
   const project = held.key.replace(/-\d+$/, '').toUpperCase();
   const found = connections(host).find((entry) => siteKey(entry.site) === siteKey(held.site) && entry.project === project);
-  if (!found) throw new SyncRefused(`no connection in this root is over ${project} on ${held.site}; eidos jira connect adds one`);
+  if (!found) throw new SyncRefused(`no connection in this root is over ${project} on ${held.site}; eidos jira-sync connect adds one`);
   return found;
 }
 
@@ -313,11 +313,11 @@ function describeCreate(plan: CreatePlan): string {
 function pullConnections(host: Host, name: string | undefined): Connection[] {
   if (name) {
     const found = connectionNamed(host, name);
-    if (found.direction !== 'pull') throw new Error(`${found.name} is a push connection, which pulls nothing; eidos jira create makes issues from tasks`);
+    if (found.direction !== 'pull') throw new Error(`${found.name} is a push connection, which pulls nothing; eidos jira-sync create makes issues from tasks`);
     return [found];
   }
   const all = connections(host).filter((entry) => entry.direction === 'pull');
-  if (all.length === 0) throw new Error('this root has no pull connection; eidos jira connect adds one');
+  if (all.length === 0) throw new Error('this root has no pull connection; eidos jira-sync connect adds one');
   return all;
 }
 
@@ -340,9 +340,9 @@ function describePlan(plan: Plan): string {
   for (const add of plan.add) lines.push(`  + ${add.key}  ${add.title} (${add.type})`);
   for (const change of plan.change) lines.push(`  ~ ${change.key}  ${change.task}${change.fields.length > 0 ? `: ${change.fields.join(', ')}` : ''}`);
   for (const skipped of plan.skipped ?? []) lines.push(`  ⊘ ${skipped.key}  ${skipped.task} is marked Don't sync; the pull leaves it`);
-  for (const waiting of plan.waiting ?? []) lines.push(`  … ${waiting.key}  made by ${waiting.task}'s create, cut short; eidos jira create ${waiting.task} links it`);
+  for (const waiting of plan.waiting ?? []) lines.push(`  … ${waiting.key}  made by ${waiting.task}'s create, cut short; eidos jira-sync create ${waiting.task} links it`);
   for (const owned of plan.owned ?? [])
-    lines.push(`  ⇄ ${owned.key}  ${owned.task}: Jira changed ${owned.fields.join(', ')}, which this root owns; the pull leaves them (eidos jira sync ${owned.task} settles it)`);
+    lines.push(`  ⇄ ${owned.key}  ${owned.task}: Jira changed ${owned.fields.join(', ')}, which this root owns; the pull leaves them (eidos jira-sync sync ${owned.task} settles it)`);
   for (const local of plan.local) lines.push(`  ! ${local.key}  ${local.task} was edited here: ${local.fields.join(', ')} (a pull overwrites it; --keep-local keeps it)`);
   for (const person of plan.people) lines.push(`  @ ${person}`);
   for (const gone of plan.gone) lines.push(`  - ${gone.key}  ${gone.task} is gone from the scope; its task stays`);
@@ -415,7 +415,7 @@ const entry: CliEntry = {
     const matching = (name: string, mode: MatchMode) => {
       const connection = connectionNamed(host, name);
       const read = cachedDescription(host.workspace, connection.name);
-      if (!read) throw new Error(`${connection.name}'s board has not been read yet; read it on the mapping page or with eidos jira describe ${connection.name}`);
+      if (!read) throw new Error(`${connection.name}'s board has not been read yet; read it on the mapping page or with eidos jira-sync describe ${connection.name}`);
       const backlog = backlogOf(host);
       if (!backlog.reshape) throw new Error('matching the Backlog to Jira needs a later Eidos MD, whose Backlog can be reshaped by a plugin');
       const root = backlog.settings();
@@ -586,7 +586,7 @@ const entry: CliEntry = {
       matchAsk: (name) => {
         const connection = connectionNamed(host, name);
         const read = cachedDescription(host.workspace, connection.name);
-        if (!read) throw new Error(`${connection.name}'s board has not been read yet; eidos jira describe ${connection.name}`);
+        if (!read) throw new Error(`${connection.name}'s board has not been read yet; eidos jira-sync describe ${connection.name}`);
         const board = settingsFor(backlogOf(host), connection);
         const jiraStatuses = [...new Set(read.types.filter((type) => !type.subtask).flatMap((type) => type.statuses.map((status) => `${status.name} (${status.category})`)))];
         const title = connection.title ?? connection.project;
@@ -605,9 +605,9 @@ const entry: CliEntry = {
             `The Backlog's priorities: ${board.priorities.join(', ')}.`,
             `The Backlog's task types: ${board.types.map((type) => `${type.title} (${type.name})`).join(', ')}.`,
             '',
-            'Read `eidos instructions backlog` and `eidos jira map ' +
+            'Read `eidos instructions backlog` and `eidos jira-sync map ' +
               connection.name +
-              ' --help` first. Say which values you would add, rename, or remove, and where the tasks holding a removed value go, and how many tasks that touches (`eidos backlog --json`). Make each change with `eidos backlog configure:status`, `configure:priority`, `configure:column`, and `configure:type`, each run with `--dry-run` first, and change nothing I have not accepted. Then pair each Jira value with its Backlog value in the mapping with `eidos jira configure:map ' +
+              ' --help` first. Say which values you would add, rename, or remove, and where the tasks holding a removed value go, and how many tasks that touches (`eidos backlog --json`). Make each change with `eidos backlog configure:status`, `configure:priority`, `configure:column`, and `configure:type`, each run with `--dry-run` first, and change nothing I have not accepted. Then pair each Jira value with its Backlog value in the mapping with `eidos jira-sync configure:map ' +
               connection.name +
               '`.',
           ].join('\n'),
@@ -911,7 +911,7 @@ const entry: CliEntry = {
           const pending = backlog
             .tasks()
             .filter((task) => {
-              const held = task.properties['jira'] as { pending?: unknown; connection?: unknown } | null | undefined;
+              const held = task.properties['jira-sync'] as { pending?: unknown; connection?: unknown } | null | undefined;
               return typeof held?.pending === 'string' && held.connection === connection.name;
             })
             .map((task) => task.id ?? task.name);
@@ -940,7 +940,7 @@ const entry: CliEntry = {
           });
         if (!task) return null;
         const held = heldOf(task);
-        const raw = task.properties['jira'] as { pending?: unknown; connection?: unknown } | null | undefined;
+        const raw = task.properties['jira-sync'] as { pending?: unknown; connection?: unknown } | null | undefined;
         const pending = !held && typeof raw?.pending === 'string';
         let connection: string | null = pending && typeof raw?.connection === 'string' ? raw.connection : null;
         if (held) {
@@ -963,10 +963,10 @@ const entry: CliEntry = {
       skip: (ref, on) => {
         const backlog = backlogOf(host);
         const task = taskFor(backlog, ref);
-        const held = { ...((task.properties['jira'] as Record<string, unknown> | null | undefined) ?? {}) };
+        const held = { ...((task.properties['jira-sync'] as Record<string, unknown> | null | undefined) ?? {}) };
         if (on) held['skip'] = true;
         else delete held['skip'];
-        backlog.set(task.id ?? task.name, { tool: { jira: Object.keys(held).length > 0 ? held : null } });
+        backlog.set(task.id ?? task.name, { tool: { 'jira-sync': Object.keys(held).length > 0 ? held : null } });
         host.emit('changed', { task: task.id ?? task.name });
       },
       createPlan: async (refs, name, options = {}) => {
@@ -1057,8 +1057,8 @@ const entry: CliEntry = {
           action((options: { json?: boolean }) => {
             const rows = api.signIns().map(({ site, email, kept }) => ({ site, email, kept }));
             if (options.json) return json(rows);
-            if (rows.length === 0) return print('This root has no Jira connection; eidos jira connect adds one.');
-            for (const row of rows) print(row.email ? `${row.site}: ${row.email}, kept for ${row.kept}` : `${row.site}: nobody signed in (eidos jira login ${row.site})`);
+            if (rows.length === 0) return print('This root has no Jira connection; eidos jira-sync connect adds one.');
+            for (const row of rows) print(row.email ? `${row.site}: ${row.email}, kept for ${row.kept}` : `${row.site}: nobody signed in (eidos jira-sync login ${row.site})`);
           }),
         );
 
@@ -1068,7 +1068,7 @@ const entry: CliEntry = {
         .requiredOption('--site <site>', 'the Jira site, <name>.atlassian.net')
         // `--project` is the host's, the project folder every command takes, so the Jira project goes by its key
         .requiredOption('--key <key>', "the Jira project's key (ACME)")
-        .option('--board <id>', 'a board whose filter sets the scope (eidos jira boards lists them)')
+        .option('--board <id>', 'a board whose filter sets the scope (eidos jira-sync boards lists them)')
         .option('--title <title>', "the name the connection is shown by; the board's own, or the project's, when none is given")
         .option('--jql <jql>', 'JQL that narrows the scope further')
         .option('--direction <direction>', 'pull (Jira to Eidos); push is not built yet', 'pull')
@@ -1112,7 +1112,7 @@ const entry: CliEntry = {
                 ...(options.existing ? { existing: { name: options.existing, ...(options.existingFolder ? { folder: options.existingFolder } : {}) } } : {}),
               });
               print(
-                `Added ${made.name} (${made.title ?? made.project}): ${made.direction} ${made.project} on ${siteKey(made.site)}${made.board ? `, board ${made.board}` : ''}${made.backlog_board ? `, onto the Backlog board ${made.backlog_board}` : ''}. Next: eidos jira describe ${made.name}, then eidos jira map ${made.name}${made.backlog_board ? `, and eidos jira match ${made.name} to give the board Jira's workflow` : ''}.`,
+                `Added ${made.name} (${made.title ?? made.project}): ${made.direction} ${made.project} on ${siteKey(made.site)}${made.board ? `, board ${made.board}` : ''}${made.backlog_board ? `, onto the Backlog board ${made.backlog_board}` : ''}. Next: eidos jira-sync describe ${made.name}, then eidos jira-sync map ${made.name}${made.backlog_board ? `, and eidos jira-sync match ${made.name} to give the board Jira's workflow` : ''}.`,
               );
             },
           ),
@@ -1128,7 +1128,7 @@ const entry: CliEntry = {
             const rows = await api.boards(site);
             if (options.json) return json(rows);
             if (rows.length === 0)
-              return print(site ? `No board on ${siteKey(site)} is readable by your account.` : 'No board is readable by an account signed in here; eidos jira login <site> first.');
+              return print(site ? `No board on ${siteKey(site)} is readable by your account.` : 'No board is readable by an account signed in here; eidos jira-sync login <site> first.');
             for (const row of rows)
               print(`${row.site}  ${String(row.id).padStart(5)}  ${row.name} (${row.type}${row.project ? `, ${row.project}` : ''})${row.connected ? `  connected as ${row.connected}` : ''}`);
           }),
@@ -1183,7 +1183,7 @@ const entry: CliEntry = {
               return;
             }
             await api.moveToSprints(name);
-            print(`Done. eidos jira pull ${plan.connection} brings the sprints in.`);
+            print(`Done. eidos jira-sync pull ${plan.connection} brings the sprints in.`);
           }),
         );
 
@@ -1219,7 +1219,7 @@ const entry: CliEntry = {
             if (done.moved.length > 0) print(`  ${done.moved.length} task${done.moved.length === 1 ? '' : 's'} it pulled moved there.`);
             if (done.left.length > 0)
               print(
-                `  ${done.left.length} stayed where they are, their status or type not one the board uses (${done.left.join(', ')}); eidos jira match ${done.connection.name} gives the board Jira's workflow, then run this again.`,
+                `  ${done.left.length} stayed where they are, their status or type not one the board uses (${done.left.join(', ')}); eidos jira-sync match ${done.connection.name} gives the board Jira's workflow, then run this again.`,
               );
           }),
         );
@@ -1313,7 +1313,7 @@ const entry: CliEntry = {
                 if (await confirm(`Map ${line}?`)) accepted.push(proposed);
               } else print(`  ${line}`);
             }
-            for (const left of draft.unmatched) print(`? ${left}; add it to the Backlog (eidos backlog configure:…) or map it by hand with eidos jira configure:map`);
+            for (const left of draft.unmatched) print(`? ${left}; add it to the Backlog (eidos backlog configure:…) or map it by hand with eidos jira-sync configure:map`);
             if (!options.yes && !process.stdin.isTTY) {
               if (draft.entries.length > 0) print('Nothing written: run in a terminal to accept entry by entry, or pass --yes to accept them all.');
               return;
@@ -1361,10 +1361,10 @@ const entry: CliEntry = {
               });
               const scope = types.length > 0 ? ` (${types.join(', ')})` : '';
               print(`${connection.name}: ${part} ${operation === 'set' ? `${from} → ${part === 'parent' ? '' : to}${scope}` : `${from ?? ''}${scope} unset`}`.trim());
-              for (const problem of problems) print(`  jira/${problem.code}: ${problem.message}`);
+              for (const problem of problems) print(`  jira-sync/${problem.code}: ${problem.message}`);
               if (starts)
                 print(
-                  `  note: ${connection.name} had no ${part} part, so every ${part === 'fields' ? 'default field' : part.replace(/_/g, ' ').replace(/s$/, '')} went by its name; from now on only the ${part} named here are carried (eidos jira map ${connection.name} drafts the rest)`,
+                  `  note: ${connection.name} had no ${part} part, so every ${part === 'fields' ? 'default field' : part.replace(/_/g, ' ').replace(/s$/, '')} went by its name; from now on only the ${part} named here are carried (eidos jira-sync map ${connection.name} drafts the rest)`,
                 );
             },
           ),
@@ -1415,11 +1415,11 @@ const entry: CliEntry = {
             const rows = api.syncStatus(name);
             if (options.json) return json(rows);
             for (const row of rows) {
-              if (row.paused) print(`${row.connection}: paused since ${row.paused.at}, ${row.paused.reason}; mend access, then eidos jira resume ${row.connection}`);
+              if (row.paused) print(`${row.connection}: paused since ${row.paused.at}, ${row.paused.reason}; mend access, then eidos jira-sync resume ${row.connection}`);
               print(`${row.connection}: ${row.edited.length === 0 ? 'nothing edited here since the last pull or sync' : `${row.edited.length} task${row.edited.length === 1 ? '' : 's'} edited here`}`);
               for (const edited of row.edited) print(`  ~ ${edited.key}  ${edited.task}: ${edited.sides.join(', ')}`);
-              for (const task of row.pending) print(`  … ${task}: a create was cut short; eidos jira create ${task} --connection ${row.connection} finds its issue`);
-              for (const cut of row.interrupted) print(`  … ${cut.key}: a sync was cut short at ${cut.at}; eidos jira sync ${cut.key} finishes it`);
+              for (const task of row.pending) print(`  … ${task}: a create was cut short; eidos jira-sync create ${task} --connection ${row.connection} finds its issue`);
+              for (const cut of row.interrupted) print(`  … ${cut.key}: a sync was cut short at ${cut.at}; eidos jira-sync sync ${cut.key} finishes it`);
             }
           }),
         );
@@ -1579,7 +1579,7 @@ const entry: CliEntry = {
         .option('--again', 'create anew a task whose earlier create was cut short and whose issue cannot be found')
         .option('--yes', 'create without asking, once nothing is left to settle')
         .option('--json', 'print as JSON')
-        .description('make a Jira issue from each task and link the task to it; from then on, eidos jira sync carries its changes')
+        .description('make a Jira issue from each task and link the task to it; from then on, eidos jira-sync sync carries its changes')
         .action(
           action(async (refs: string[], options: { connection: string; type?: string; field?: string[]; again?: boolean; yes?: boolean; json?: boolean }) => {
             const chosen: CreateOptions = { ...(options.type ? { type: options.type } : {}), fields: pairsOf(options.field, '--field'), again: options.again === true };
@@ -1603,7 +1603,7 @@ const entry: CliEntry = {
             if (options.json) return json({ plans, created });
             for (const made of created) {
               print(`${made.task} → ${made.key}  ${made.url}${made.found ? ' (found by its mark)' : ''}`);
-              if (made.differs.length > 0) print(`    Jira holds ${made.differs.join(', ')} otherwise; eidos jira sync ${made.task} sends the task's`);
+              if (made.differs.length > 0) print(`    Jira holds ${made.differs.join(', ')} otherwise; eidos jira-sync sync ${made.task} sends the task's`);
             }
           }),
         );
@@ -1630,7 +1630,7 @@ const entry: CliEntry = {
           .filter((connection) => connection.backlog_board && !boardOf(backlog.settings(), connection))
           .map((connection) => ({
             path: SETTINGS_PATH,
-            message: `${connection.name} pulls onto the Backlog board ${connection.backlog_board}, which the Backlog does not declare; eidos jira configure:connection set ${connection.name} picks another`,
+            message: `${connection.name} pulls onto the Backlog board ${connection.backlog_board}, which the Backlog does not declare; eidos jira-sync configure:connection set ${connection.name} picks another`,
           }));
       },
     });
@@ -1646,7 +1646,7 @@ const entry: CliEntry = {
         if (!backlog) return [];
         const seen = new Map<string, string[]>();
         for (const task of backlog.tasks()) {
-          const held = task.properties['jira'] as { site?: string; id?: string; key?: string } | undefined;
+          const held = task.properties['jira-sync'] as { site?: string; id?: string; key?: string } | undefined;
           if (!held?.site || !held.id) continue;
           const key = `${siteKey(held.site)}#${held.id}`;
           seen.set(key, [...(seen.get(key) ?? []), task.id ?? task.name]);

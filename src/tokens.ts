@@ -1,5 +1,5 @@
 // What this machine keeps of a person's Jira sign-ins (Jira REQ4, D-B46): one
-// file, `plugins/jira/credentials.json` in the Eidos app data folder, outside
+// file, `plugins/jira-sync/credentials.json` in the Eidos app data folder, outside
 // every root, readable only by its owner. It holds each API token, and the
 // email a site signs in with on every root of this machine (`login --global`).
 // The same file on every operating system, found as the CLI finds the app
@@ -15,7 +15,7 @@ export function appDataDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
   return path.join(env['XDG_CONFIG_HOME'] ? path.resolve(env['XDG_CONFIG_HOME']) : path.join(homedir(), '.config'), 'eidosmd');
 }
 
-export const tokensFile = (env: NodeJS.ProcessEnv = process.env): string => path.join(appDataDir(env), 'plugins', 'jira', 'credentials.json');
+export const tokensFile = (env: NodeJS.ProcessEnv = process.env): string => path.join(appDataDir(env), 'plugins', 'jira-sync', 'credentials.json');
 
 interface Held {
   // a site's email for every root on this machine, by site

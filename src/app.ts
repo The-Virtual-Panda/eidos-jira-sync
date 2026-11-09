@@ -1,6 +1,6 @@
 // The Jira plugin's app entry, which only the Eidos MD app mounts: the routes
 // its settings page and the Backlog's Fetch and Pull row call, under
-// `/api/plugins/jira/`. Each answers through the CLI entry's API, so a sign-in,
+// `/api/plugins/jira-sync/`. Each answers through the CLI entry's API, so a sign-in,
 // a connection, a mapping, or a pull made from the page is the one a command
 // makes. A token reaches the login route and goes straight to the credentials
 // file; no answer carries it back.
@@ -96,7 +96,7 @@ function state(host: AppHost, api: JiraApi): Record<string, unknown> {
 }
 
 const entry: AppEntry<JiraApi> = {
-  name: 'jira',
+  name: 'jira-sync',
   mount(host, api) {
     host.route('GET', 'state', () => state(host, api));
 

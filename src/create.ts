@@ -83,7 +83,7 @@ const SEARCH_LAG_MS = 5 * 60_000;
 const same = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 function pendingOf(task: TaskView): Pending | null {
-  const value = task.properties['jira'];
+  const value = task.properties['jira-sync'];
   if (typeof value !== 'object' || value === null) return null;
   const held = value as Record<string, unknown>;
   return typeof held['pending'] === 'string' && typeof held['since'] === 'string' && typeof held['id'] !== 'string' ? (held as unknown as Pending) : null;
@@ -122,7 +122,7 @@ function typeOfTask(context: Context, description: Description, task: TaskView, 
         code: 'unmapped',
         message: `${wanted} does not read back as the task's type ${task.type} (${back.map((type) => type.name).join(', ') || 'no Jira type does'})`,
         ...(back.length > 0 ? { ask: { kind: 'type' as const, choices: back.map((type) => type.name) } } : {}),
-        fix: `--type "<one of ${back.map((type) => type.name).join(', ')}>", or eidos jira configure:map ${name} set types "<Jira type>" ${task.type}`,
+        fix: `--type "<one of ${back.map((type) => type.name).join(', ')}>", or eidos jira-sync configure:map ${name} set types "<Jira type>" ${task.type}`,
       },
     };
   }
@@ -138,8 +138,8 @@ function typeOfTask(context: Context, description: Description, task: TaskView, 
       ...(pool.length > 0 ? { ask: { kind: 'type' as const, choices: pool.map((type) => type.name) } } : {}),
       fix:
         pool.length === 0
-          ? `eidos jira configure:map ${name} set types "<Jira type>" ${task.type}`
-          : `--type "<one of ${pool.map((type) => type.name).join(', ')}>", or for every create: eidos jira configure:map ${name} set create.types ${task.type} "<Jira type>"`,
+          ? `eidos jira-sync configure:map ${name} set types "<Jira type>" ${task.type}`
+          : `--type "<one of ${pool.map((type) => type.name).join(', ')}>", or for every create: eidos jira-sync configure:map ${name} set create.types ${task.type} "<Jira type>"`,
     },
   };
 }
@@ -154,9 +154,9 @@ export interface PreparedCreate {
 export async function prepareCreate(context: Context, task: TaskView, options: CreateOptions = {}): Promise<PreparedCreate> {
   const { connection, backlog } = context;
   const name = task.id ?? task.name;
-  if (skipOf(task)) throw new SyncRefused(`${name} is marked Don't sync; eidos jira skip ${name} --off lets it go to Jira`);
+  if (skipOf(task)) throw new SyncRefused(`${name} is marked Don't sync; eidos jira-sync skip ${name} --off lets it go to Jira`);
   const linked = heldOf(task);
-  if (linked) throw new SyncRefused(`${name} already holds ${linked.key}; eidos jira sync ${name} carries its changes`);
+  if (linked) throw new SyncRefused(`${name} already holds ${linked.key}; eidos jira-sync sync ${name} carries its changes`);
   const pending = pendingOf(task);
   const plan: CreatePlan = { task: name, connection: connection.name, project: connection.project, type: null, fields: [], parent: null, later: [], blockers: [], recovering: pending !== null };
   if (pending) {
@@ -235,7 +235,7 @@ export async function prepareCreate(context: Context, task: TaskView, options: C
     const field = type.fields.find((held) => held.id === key || same(held.name, key));
     if (!field) {
       if (options.fields && key in options.fields)
-        plan.blockers.push({ side: null, code: 'value', message: `${type.name} has no field ${key} on its create screen`, fix: `eidos jira describe ${connection.name} lists its fields` });
+        plan.blockers.push({ side: null, code: 'value', message: `${type.name} has no field ${key} on its create screen`, fix: `eidos jira-sync describe ${connection.name} lists its fields` });
       continue;
     }
     if (fields[field.id] !== undefined) continue;
@@ -264,7 +264,7 @@ export async function prepareCreate(context: Context, task: TaskView, options: C
       code: 'required',
       message: `${type.name} requires ${field.name} (${field.id}), which the task does not hold`,
       ask: { kind: 'field', field: field.id, choices: field.allowed ?? [] },
-      fix: `--field ${field.id}="<${field.allowed ? field.allowed.join(' | ') : 'value'}>", or create_defaults in the mapping: eidos jira configure:map ${connection.name} set create.fields ${field.id} "<value>"`,
+      fix: `--field ${field.id}="<${field.allowed ? field.allowed.join(' | ') : 'value'}>", or create_defaults in the mapping: eidos jira-sync configure:map ${connection.name} set create.fields ${field.id} "<value>"`,
     });
   }
   return { plan, task, payload: { fields }, pending: null };
@@ -291,7 +291,7 @@ export async function create(context: Context, prepared: PreparedCreate, options
             : `${name}'s create was cut short and no issue in ${connection.project} carries its mark; check Jira, then --again creates it anew`,
         );
       // the mark taken off, so the task is planned again from what it holds now
-      backlog.set(name, { tool: { jira: null } });
+      backlog.set(name, { tool: { 'jira-sync': null } });
       const fresh = await prepareCreate(context, backlog.get(name), options);
       return create(context, fresh, { ...options, again: false });
     }
@@ -299,7 +299,7 @@ export async function create(context: Context, prepared: PreparedCreate, options
     if (!prepared.payload || prepared.plan.blockers.length > 0)
       throw new SyncRefused(`${name} is not created: ${prepared.plan.blockers.length} thing${prepared.plan.blockers.length === 1 ? '' : 's'} to settle first`);
     const mark: Pending = { site: siteKey(connection.site), connection: connection.name, pending: randomUUID(), since: new Date().toISOString() };
-    backlog.set(name, { tool: { jira: { ...mark } } });
+    backlog.set(name, { tool: { 'jira-sync': { ...mark } } });
     try {
       issueRef = await client.post<{ id: string; key: string }>('/rest/api/3/issue', {
         ...prepared.payload,
@@ -308,7 +308,7 @@ export async function create(context: Context, prepared: PreparedCreate, options
     } catch (cause) {
       // Jira refusing the create (a 4xx: a field it would not take) made no issue, so the mark comes off; a lost answer
       // or a 5xx may have made one, and the mark stays for the next create to look for it
-      if (cause instanceof JiraError && cause.status !== null && cause.status >= 400 && cause.status < 500) backlog.set(name, { tool: { jira: null } });
+      if (cause instanceof JiraError && cause.status !== null && cause.status >= 400 && cause.status < 500) backlog.set(name, { tool: { 'jira-sync': null } });
       throw cause;
     }
   }
@@ -397,11 +397,11 @@ async function link(context: Context, task: TaskView, ref: { id: string; key: st
     digest: Object.fromEntries(Object.entries(digest).sort(([a], [b]) => a.localeCompare(b))),
     remote: Object.fromEntries(Object.entries(remote).sort(([a], [b]) => a.localeCompare(b))),
   };
-  const written = backlog.set(name, { ...filled, tool: { jira } });
+  const written = backlog.set(name, { ...filled, tool: { 'jira-sync': jira } });
   // the digest of a side taken from Jira as the task holds it once written, as a pull settles one
   if (settledHere.length > 0) {
     for (const side of settledHere) jira.digest![side] = short(normalise(heldValue(written, side)));
-    backlog.set(name, { tool: { jira: { ...jira, digest: Object.fromEntries(Object.entries(jira.digest!).sort(([a], [b]) => a.localeCompare(b))) } } });
+    backlog.set(name, { tool: { 'jira-sync': { ...jira, digest: Object.fromEntries(Object.entries(jira.digest!).sort(([a], [b]) => a.localeCompare(b))) } } });
   }
   return { task: name, key: issue.key, url: `https://${siteKey(connection.site)}/browse/${issue.key}`, differs };
 }

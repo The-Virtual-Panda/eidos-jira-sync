@@ -37,7 +37,7 @@ export type SprintIndex = Map<string, { name: string; state: string; at: number 
 export const carriesSprints = (pairs: Pair[]): boolean => pairs.some((pair) => pair.eidos === SPRINT_SIDE);
 
 export const holdFor = (connection: Connection): SprintHold => ({
-  tool: 'jira',
+  tool: 'jira-sync',
   title: 'Jira',
   url: `${siteBase(connection.site)}/jira/software/projects/${connection.project}/boards/${connection.board}`,
 });

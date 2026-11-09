@@ -46,12 +46,12 @@ const story = (): string => {
 };
 const backlogSettings = (): string => readFileSync(path.join(root, '.eidos/plugins/backlog/settings.yaml'), 'utf8');
 const setSprintPair = async (eidosSide: string): Promise<void> => {
-  await ok(['jira', 'configure:map', 'acme', 'set', 'fields', 'customfield_10020', eidosSide]);
+  await ok(['jira-sync', 'configure:map', 'acme', 'set', 'fields', 'customfield_10020', eidosSide]);
 };
 
 before(async () => {
   fake = await startFakeJira();
-  const dir = path.join(scratch, 'app', 'plugins', 'jira', version);
+  const dir = path.join(scratch, 'app', 'plugins', 'jira-sync', version);
   mkdirSync(dir, { recursive: true });
   for (const file of ['manifest.yaml', 'cli.js']) copyFileSync(path.join(repo, 'dist', file), path.join(dir, file));
   const cliVersion = /eidosmd (\S+)/.exec(await ok(['--version']))?.[1] ?? '';
@@ -59,11 +59,11 @@ before(async () => {
   writeFileSync(manifest, readFileSync(manifest, 'utf8').replace(/^min_host: .*$/m, `min_host: ${cliVersion}`));
   await ok(['install', '--blank', root, '--product', 'Scratch', '--yes', '--offline']);
   await ok(['plugin', 'enable', 'backlog']);
-  await ok(['plugin', 'enable', 'jira']);
-  await ok(['plugin', 'allow', 'jira']);
-  await ok(['jira', 'login', fake.url], `${EMAIL}\n${TOKEN}\n`);
-  await ok(['jira', 'connect', 'acme', '--site', fake.url, '--key', 'ACME', '--board', '1']);
-  await ok(['jira', 'describe', 'acme']);
+  await ok(['plugin', 'enable', 'jira-sync']);
+  await ok(['plugin', 'allow', 'jira-sync']);
+  await ok(['jira-sync', 'login', fake.url], `${EMAIL}\n${TOKEN}\n`);
+  await ok(['jira-sync', 'connect', 'acme', '--site', fake.url, '--key', 'ACME', '--board', '1']);
+  await ok(['jira-sync', 'describe', 'acme']);
 });
 
 after(async () => {
@@ -72,55 +72,55 @@ after(async () => {
 });
 
 test('a connection that has pulled is not offered Backlog sprints by a draft, so saving its mapping changes nothing about them', async () => {
-  await ok(['jira', 'pull', 'acme']);
-  const draft = JSON.parse(await ok(['jira', 'map', 'acme', '--json'])) as { entries: Array<{ jira: string; eidos: string }> };
+  await ok(['jira-sync', 'pull', 'acme']);
+  const draft = JSON.parse(await ok(['jira-sync', 'map', 'acme', '--json'])) as { entries: Array<{ jira: string; eidos: string }> };
   assert.equal(draft.entries.find((entry) => entry.jira === 'customfield_10020')?.eidos, 'milestone');
 });
 
 test('a scrum board with its sprint field saved as the milestone keeps the milestone, and its board stays as it was', async () => {
   await setSprintPair('milestone');
-  const fetched = await ok(['jira', 'fetch', 'acme', '--full']);
+  const fetched = await ok(['jira-sync', 'fetch', 'acme', '--full']);
   assert.match(fetched, /milestones to add: Sprint 7/);
   assert.doesNotMatch(fetched, /sprints to add/);
-  await ok(['jira', 'pull', 'acme', '--full']);
+  await ok(['jira-sync', 'pull', 'acme', '--full']);
   assert.match(story(), /^milestone: Sprint 7$/m);
   assert.doesNotMatch(story(), /^sprint:/m);
   assert.doesNotMatch(backlogSettings(), /^\s*sprints: true|sprints_held/m, 'the board does not start running in sprints');
   assert.match(await ok(['backlog', 'sprints']), /no sprints/);
-  assert.match(await ok(['jira', 'fetch', 'acme']), /nothing to pull/, 'and nothing reads as changed on the next look');
+  assert.match(await ok(['jira-sync', 'fetch', 'acme']), /nothing to pull/, 'and nothing reads as changed on the next look');
 });
 
 test('a sprint field saved to a property named sprint keeps writing it, with nothing removed', async () => {
   await ok(['backlog', 'configure:property', 'add', 'sprint', '--type', 'List']);
   await setSprintPair('property:sprint');
-  await ok(['jira', 'pull', 'acme', '--full']);
+  await ok(['jira-sync', 'pull', 'acme', '--full']);
   assert.match(story(), /^sprint: \["Sprint 7"\]$/m);
   assert.match(backlogSettings(), /name: sprint/, 'the property stays declared');
   assert.doesNotMatch(backlogSettings(), /sprints_held/);
-  assert.match(await ok(['jira', 'fetch', 'acme', '--full']), /nothing to pull/);
+  assert.match(await ok(['jira-sync', 'fetch', 'acme', '--full']), /nothing to pull/);
 });
 
 test('Jira Pull REQ3: a sprint field moved to the milestone reads every issue again on the next pull, without --full', async () => {
   await setSprintPair('milestone');
-  const fetched = await ok(['jira', 'fetch', 'acme']);
+  const fetched = await ok(['jira-sync', 'fetch', 'acme']);
   assert.match(fetched, /the whole scope, read again as the mapping changed/);
-  await ok(['jira', 'pull', 'acme']);
+  await ok(['jira-sync', 'pull', 'acme']);
   assert.match(story(), /^milestone: Sprint 7$/m);
-  assert.match(await ok(['jira', 'fetch', 'acme']), /nothing to pull \(changed since/, 'and the next look reads only what changed');
+  assert.match(await ok(['jira-sync', 'fetch', 'acme']), /nothing to pull \(changed since/, 'and the next look reads only what changed');
 });
 
 test('Jira Pull REQ3: a connection moved from a property to Backlog sprints and on to the milestone fills each in, without --full', async () => {
   await setSprintPair('property:sprint');
-  await ok(['jira', 'pull', 'acme']);
+  await ok(['jira-sync', 'pull', 'acme']);
   assert.match(story(), /^sprint: \["Sprint 7"\]$/m);
-  await ok(['jira', 'sprints', 'acme', '--yes']);
-  await ok(['jira', 'pull', 'acme']);
+  await ok(['jira-sync', 'sprints', 'acme', '--yes']);
+  await ok(['jira-sync', 'pull', 'acme']);
   assert.match(story(), /^sprint: Sprint 7$/m);
   // the milestone an earlier mapping wrote is the root's while nothing maps it (Jira Pull REQ6); cleared, so the pull below is what fills it
   await ok(['backlog', 'set', 'T-ACME-2', '--milestone', '']);
   assert.doesNotMatch(story(), /^milestone: Sprint 7$/m);
   await setSprintPair('milestone');
-  await ok(['jira', 'pull', 'acme']);
+  await ok(['jira-sync', 'pull', 'acme']);
   assert.match(story(), /^milestone: Sprint 7$/m);
-  assert.match(await ok(['jira', 'fetch', 'acme']), /nothing to pull \(changed since/);
+  assert.match(await ok(['jira-sync', 'fetch', 'acme']), /nothing to pull \(changed since/);
 });

@@ -4,7 +4,7 @@
 // the Activity Bar whose sidebar fetches and pulls each board, the plugin's
 // own settings page in place of the host's form (signing in, connecting a
 // board by pasting its address, and the options), and a page of its own per
-// board for its mapping, at /p/jira/mapping/<board>. Each answers through the
+// board for its mapping, at /p/jira-sync/mapping/<board>. Each answers through the
 // plugin's own routes.
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type MutableRefObject } from 'react';
 import {
@@ -433,7 +433,7 @@ function JiraView(): JSX.Element {
           {t('noBoards')}
         </Text>
         <Row>
-          <Button size="sm" onClick={() => host.navigate('/plugins/jira')}>
+          <Button size="sm" onClick={() => host.navigate('/plugins/jira-sync')}>
             {t('connectBoard')}
           </Button>
         </Row>
@@ -548,7 +548,7 @@ function JiraView(): JSX.Element {
         />
       )}
       <NavFoot>
-        <NavFootLink onClick={() => host.navigate('/plugins/jira')}>{t('openSettings')}</NavFootLink>
+        <NavFootLink onClick={() => host.navigate('/plugins/jira-sync')}>{t('openSettings')}</NavFootLink>
       </NavFoot>
     </Nav>
   );
@@ -1681,7 +1681,7 @@ function MappingPage(props: { name: string }): JSX.Element {
   }, [hostRef, props.name, model, AskAgent]);
   const leaveUnsaved = async (): Promise<boolean> => !unsaved || host.dialog.confirm(t('unsavedAsk'), { title: t('unsavedTitle'), ok: t('discard'), danger: true });
   const back = async (): Promise<void> => {
-    if (await leaveUnsaved()) host.navigate('/plugins/jira');
+    if (await leaveUnsaved()) host.navigate('/plugins/jira-sync');
   };
   const readAgain = async (): Promise<void> => {
     if (await leaveUnsaved()) read(true);
@@ -2376,7 +2376,7 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
 }
 
 export const page: PagePlugin = {
-  name: 'jira',
+  name: 'jira-sync',
   strings: JIRA_STRINGS,
   views: [
     { sector: 'primary', name: 'boards', title: 'Jira Sync', icon: JiraIcon, render: () => <JiraView /> },

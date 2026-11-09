@@ -242,14 +242,14 @@ export function checkMapping(connection: Connection, board: BoardSettings, descr
     const field = pool.find((held) => held.id === pair.jira || same(held.name, pair.jira));
     if (description && !field && !SYSTEM[pair.jira]) {
       const where = named.length > 0 ? `the issue type ${named.map((type) => type.name).join(', ')} has` : "the project's issue types have";
-      out.push({ code: 'target-unknown', message: `${at('field', pair)}: ${where} no field ${pair.jira} (eidos jira describe ${connection.name} lists them)` });
+      out.push({ code: 'target-unknown', message: `${at('field', pair)}: ${where} no field ${pair.jira} (eidos jira-sync describe ${connection.name} lists them)` });
       continue;
     }
     const why = carries(kindOf(field, pair.jira), pair.eidos, board);
     if (why) out.push({ code: 'pair-type', message: `${at('field', pair)}: ${why}; change the pair` });
     if (pair.eidos === 'sprint' && connection.board === undefined) out.push({ code: 'pair-type', message: `${at('field', pair)}: a sprint belongs to a board, and this connection names none` });
     if (pair.eidos === 'sprint' && board.properties.some((property) => property.name === 'sprint'))
-      out.push({ code: 'pair-type', message: `${at('field', pair)}: a task property named sprint holds that key; eidos jira sprints ${connection.name} moves it` });
+      out.push({ code: 'pair-type', message: `${at('field', pair)}: a task property named sprint holds that key; eidos jira-sync sprints ${connection.name} moves it` });
     if (field?.allowed && pair.eidos.startsWith('property:')) {
       const property = board.properties.find((held) => same(held.name, pair.eidos.slice('property:'.length)));
       const missing = property?.options ? field.allowed.filter((value) => !property.options!.some((option) => same(option, value))) : [];

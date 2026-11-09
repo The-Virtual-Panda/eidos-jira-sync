@@ -1,12 +1,12 @@
 {
-  "name": "@iungertime/jira",
+  "name": "eidos-jira-sync",
   "version": "0.4.1",
   "private": true,
   "description": "Jira Cloud for Eidos MD: pull a board's issues into the Backlog as tasks, and their comments as threads signed by the people who wrote them.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iUngerTime/eidos-jira.git"
+    "url": "git+https://github.com/The-Virtual-Panda/eidos-jira-sync.git"
   },
   "type": "module",
   "scripts": {

@@ -2,7 +2,7 @@
 // last pull and says what a pull would do, writing nothing to the root; a
 // pull does it (Jira Pull REQ1 to REQ11, REQ14 to REQ16). Jira wins on every
 // field the mapping carries; what the mapping leaves alone is never touched.
-// Each issue's task holds its issue under its `jira` key, with what the pull
+// Each issue's task holds its issue under its `jira-sync` key, with what the pull
 // wrote as a digest per field, so an edit made in the root is told from a
 // change in Jira on any machine. Only the last pull's time is per machine.
 import { boardOf, settingsFor } from './boards.ts';
@@ -82,7 +82,7 @@ export interface Issue {
   };
 }
 
-// What a task holds of its issue (Jira REQ14), under its `jira` key.
+// What a task holds of its issue (Jira REQ14), under its `jira-sync` key.
 export interface Held {
   site: string;
   id: string;
@@ -351,10 +351,10 @@ export function heldValue(task: TaskView, eidos: string): unknown {
 }
 
 // A task marked Don't sync stays the root's own: no pull writes it, no sync or create sends it, wherever its issue is.
-export const skipOf = (task: TaskView): boolean => (task.properties['jira'] as { skip?: unknown } | null | undefined)?.skip === true;
+export const skipOf = (task: TaskView): boolean => (task.properties['jira-sync'] as { skip?: unknown } | null | undefined)?.skip === true;
 
 export const heldOf = (task: TaskView): Held | null => {
-  const value = task.properties['jira'];
+  const value = task.properties['jira-sync'];
   if (typeof value !== 'object' || value === null) return null;
   const held = value as Record<string, unknown>;
   return typeof held['id'] === 'string' && typeof held['site'] === 'string' && typeof held['key'] === 'string' ? (held as unknown as Held) : null;
@@ -467,7 +467,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const onto = boardOf(backlog.settings(), connection);
   if (connection.backlog_board && !onto)
     throw new Error(
-      `${connection.name} pulls onto the Backlog board ${connection.backlog_board}, which the Backlog no longer declares; pick its board again on Jira Sync's settings or with eidos jira configure:connection`,
+      `${connection.name} pulls onto the Backlog board ${connection.backlog_board}, which the Backlog no longer declares; pick its board again on Jira Sync's settings or with eidos jira-sync configure:connection`,
     );
   const board = settingsFor(backlog, connection);
   const pairs = fieldsOf(connection, board);
@@ -476,7 +476,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const carrying = carriesSprints(pairs) && connection.board !== undefined;
   if (carrying && typeof backlog.holdSprints !== 'function') throw new Error(`${connection.name} carries sprints as the Backlog's own, which needs a newer Eidos MD`);
   if (carrying && board.properties.some((property) => property.name === SPRINT_SIDE))
-    throw new Error(`a task property named sprint holds the key ${connection.name}'s sprints need; eidos jira sprints ${connection.name} moves it`);
+    throw new Error(`a task property named sprint holds the key ${connection.name}'s sprints need; eidos jira-sync sprints ${connection.name} moves it`);
   if (carrying && otherCarrier(host, connection, backlog))
     throw new Error(`another connection already carries its sprints onto ${connection.backlog_board ?? "this Backlog's board"}; a board's sprints come from one Jira board`);
   const boardSprints: JiraSprint[] = carrying ? await readBoardSprints(client, connection.board!) : [];
@@ -507,7 +507,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   // tasks whose create was cut short: an issue carrying one's mark is that task's, never a second task (Jira Push REQ9)
   const pendingMarks = new Map<string, string>();
   for (const task of tasks()) {
-    const mark = task.properties['jira'] as { site?: unknown; pending?: unknown } | null | undefined;
+    const mark = task.properties['jira-sync'] as { site?: unknown; pending?: unknown } | null | undefined;
     if (typeof mark?.pending === 'string' && typeof mark.site === 'string' && siteKey(mark.site) === site) pendingMarks.set(mark.pending, task.id ?? task.name);
   }
   // REQ11: a task marked gone whose issue is in the scope again is read with what changed, though Jira may not have
@@ -739,7 +739,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
     let written: TaskView;
     if (!task) {
       const created = moment(issue.fields.created);
-      const make = { ...fields, title: fields.title ?? issue.key, ...(onto ? { board: onto.name } : {}), ...dates, ...(created ? { created } : {}), tool: { jira } };
+      const make = { ...fields, title: fields.title ?? issue.key, ...(onto ? { board: onto.name } : {}), ...dates, ...(created ? { created } : {}), tool: { 'jira-sync': jira } };
       if (make.parent) written = backlog.create(make);
       else {
         try {
@@ -759,7 +759,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
       }
       if (fields.sections && Object.keys(fields.sections).length === 0) delete fields.sections;
       if (fields.properties && Object.keys(fields.properties).length === 0) delete fields.properties;
-      written = backlog.set(task.id ?? task.name, { ...fields, ...dates, tool: { jira } });
+      written = backlog.set(task.id ?? task.name, { ...fields, ...dates, tool: { 'jira-sync': jira } });
       // counted when anything of the task was written, a reference pointed at a file just downloaded included
       if (Object.keys(fields).length > 0 || was?.key !== issue.key || was?.gone !== undefined) done.changed += 1;
     }
@@ -767,7 +767,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
     const settled = Object.fromEntries(
       Object.keys(jira.digest!).map((eidos) => [eidos, eidos === 'parent' || kept.includes(eidos) || intent.absent.has(eidos) ? jira.digest![eidos]! : short(normalise(heldValue(written, eidos)))]),
     );
-    if (JSON.stringify(settled) !== JSON.stringify(jira.digest)) written = backlog.set(written.id ?? written.name, { ...dates, tool: { jira: { ...jira, digest: settled } } });
+    if (JSON.stringify(settled) !== JSON.stringify(jira.digest)) written = backlog.set(written.id ?? written.name, { ...dates, tool: { 'jira-sync': { ...jira, digest: settled } } });
     if (context.pullAttachments) linkAttachments(context, written, issue);
     if (intent.comments && context.comments) {
       const counted = applyComments(context, written, intent.comments, issue, mention, people);
@@ -821,7 +821,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
     const task = [...byIssue().values()].find((candidate) => heldOf(candidate)?.key === gone.key);
     if (!task) continue;
     const jira = heldOf(task)!;
-    backlog.set(task.id ?? task.name, { ...(task.updated ? { updated: task.updated } : {}), tool: { jira: { ...jira, gone: today } } });
+    backlog.set(task.id ?? task.name, { ...(task.updated ? { updated: task.updated } : {}), tool: { 'jira-sync': { ...jira, gone: today } } });
     done.gone += 1;
   }
 
