@@ -361,7 +361,8 @@ export interface EditorModel {
   statuses: Array<{ name: string; category: StatusCategory }>;
   priorities: string[];
   link_types: string[];
-  backlog: { types: string[]; statuses: string[]; priorities: string[]; link_types: string[]; properties: Array<{ name: string; type: string }> };
+  // each section's title by its key, so a section target reads as the task shows it
+  backlog: { types: string[]; statuses: string[]; priorities: string[]; link_types: string[]; properties: Array<{ name: string; type: string }>; sections: Record<string, string> };
   // the mapping as held, and a whole one drafted from names and categories, the page showing a held pair before a drafted one
   mapping: Mapping;
   suggested: Mapping;
@@ -458,6 +459,7 @@ export function editorModel(connection: Connection, board: BoardSettings, descri
       priorities: board.priorities,
       link_types: board.link_types.map((type) => type.name),
       properties: board.properties.map((property) => ({ name: property.name, type: property.type })),
+      sections: Object.fromEntries([...board.types.flatMap((type) => type.sections), ...board.sections].map((section) => [section.key, section.title])),
     },
     mapping: connection.mapping,
     suggested,

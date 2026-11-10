@@ -42,6 +42,7 @@ import {
 } from 'eidosmd/page';
 import { mergeText, segmentsOf, type Pick } from './merge.ts';
 import { JIRA_STRINGS } from './page-strings.ts';
+import { isEmptyText, readLines, type ReadableLine, type Span } from './readable.ts';
 
 interface SignInRow {
   site: string;
@@ -138,7 +139,8 @@ interface Model {
   statuses: Array<{ name: string; category: 'todo' | 'in_progress' | 'done' }>;
   priorities: string[];
   link_types: string[];
-  backlog: { types: string[]; statuses: string[]; priorities: string[]; link_types: string[]; properties: Array<{ name: string; type: string }> };
+  // each section's title by its key; absent from a plugin build before it was sent
+  backlog: { types: string[]; statuses: string[]; priorities: string[]; link_types: string[]; properties: Array<{ name: string; type: string }>; sections?: Record<string, string> };
   suggested: Partial<Record<Tab, Pair[]>>;
   chosen: Choice;
 }
@@ -271,36 +273,59 @@ function sharedLines(left: string[], right: string[]): { left: boolean[]; right:
   return out;
 }
 
-// A text field's two sides whole, Jira's then this task's: the lines both hold muted, and those only one side holds marked
-// with − (Jira's alone) or + (here alone), so what each side says is read, not guessed at.
+// A line of a section read as the task shows it (bullets, boxes, bold, code), led by its mark when one side alone holds
+// it: − Jira's alone, + here alone. A blank line carries no mark, there being nothing on it to read.
+function ReadLine(props: { line: ReadableLine; mark: string | null }): JSX.Element {
+  const { line } = props;
+  const marked = props.mark !== null && line.kind !== 'blank';
+  const lead = `${marked ? `${props.mark} ` : '\u00a0\u00a0'}${'\u00a0\u00a0\u00a0\u00a0'.repeat(line.depth)}${line.lead ? `${line.lead} ` : ''}`;
+  return (
+    <Text size="sm" tone={marked ? 'default' : 'muted'} weight={line.kind === 'heading' ? 'strong' : 'normal'} block>
+      {lead}
+      {line.kind === 'rule' ? '———' : line.spans.length === 0 ? '\u00a0' : line.spans.map((span, index) => <SpanText key={index} span={span} />)}
+    </Text>
+  );
+}
+
+// A run of a line's text with the marks it carries, as the page's own elements set them.
+function SpanText(props: { span: Span }): JSX.Element {
+  const { span } = props;
+  let node: JSX.Element | string = span.text;
+  if (span.code) node = <code>{node}</code>;
+  if (span.strike) node = <s>{node}</s>;
+  if (span.em) node = <em>{node}</em>;
+  if (span.strong) node = <strong>{node}</strong>;
+  return <>{node}</>;
+}
+
+// A text field's two sides whole, Jira's then this task's, read as the task shows them: the lines both hold muted, and
+// those only one side holds marked − (Jira's alone) or + (here alone), so what each side says is read, not guessed at.
+// A side with no text says so in words.
 function TextSides(props: { jira: string; here: string }): JSX.Element {
   const { t } = usePluginHost();
-  const jira = props.jira.split('\n');
-  const here = props.here.split('\n');
+  const jira = isEmptyText(props.jira) ? [] : props.jira.split('\n');
+  const here = isEmptyText(props.here) ? [] : props.here.split('\n');
   const shared = sharedLines(jira, here);
-  const line = (text: string, kept: boolean, mark: string, key: number): JSX.Element => (
-    <Text key={key} size="sm" tone={kept ? 'muted' : 'default'} weight={kept ? 'normal' : 'strong'} block>
-      {`${kept ? '\u00a0\u00a0' : `${mark} `}${text === '' ? '\u00a0' : text}`}
-    </Text>
+  const side = (label: string, empty: string, lines: string[], kept: boolean[], mark: string, testid: string): JSX.Element => (
+    <Card variant="home">
+      <Stack gap="xs" data-testid={testid}>
+        <Text size="xs" tone="faint" block>
+          {label}
+        </Text>
+        {lines.length === 0 ? (
+          <Text size="sm" tone="faint" block data-testid="jira-side-empty">
+            {empty}
+          </Text>
+        ) : (
+          readLines(lines).map((line, index) => <ReadLine key={index} line={line} mark={kept[index] ? null : mark} />)
+        )}
+      </Stack>
+    </Card>
   );
   return (
     <Stack gap="sm" data-testid="jira-text-sides">
-      <Card variant="home">
-        <Stack gap="xs">
-          <Text size="xs" tone="faint" block>
-            {t('sideJira')}
-          </Text>
-          {jira.map((text, index) => line(text, shared.left[index]!, '−', index))}
-        </Stack>
-      </Card>
-      <Card variant="home">
-        <Stack gap="xs">
-          <Text size="xs" tone="faint" block>
-            {t('sideHere')}
-          </Text>
-          {here.map((text, index) => line(text, shared.right[index]!, '+', index))}
-        </Stack>
-      </Card>
+      {side(t('sideJira'), t('emptyInJira'), jira, shared.left, '−', 'jira-side-jira')}
+      {side(t('sideHere'), t('emptyHere'), here, shared.right, '+', 'jira-side-here')}
     </Stack>
   );
 }
@@ -850,12 +875,7 @@ function MergeEditor(props: { jira: string; here: string; onUse: (text: string) 
     setPicks(picks.map((held, at) => (at === index ? chosen : held)));
     setEdited(null);
   };
-  const lines = (held: string[], mark: string, kept: boolean): JSX.Element[] =>
-    held.map((line, index) => (
-      <Text key={index} size="sm" tone={kept ? 'muted' : 'default'} weight={kept ? 'normal' : 'strong'} block>
-        {`${mark} ${line === '' ? '\u00a0' : line}`}
-      </Text>
-    ));
+  const lines = (held: string[], mark: string, kept: boolean): JSX.Element[] => readLines(held).map((line, index) => <ReadLine key={index} line={line} mark={kept ? null : mark} />);
   let conflict = -1;
   return (
     <Stack gap="sm" data-testid="jira-merge">
@@ -863,7 +883,7 @@ function MergeEditor(props: { jira: string; here: string; onUse: (text: string) 
         {t(count === 1 ? 'mergeHintOne' : 'mergeHint', { n: count })}
       </Text>
       {segments.map((segment, index) => {
-        if (segment.kind === 'shared') return <Stack key={index}>{lines(segment.lines, '\u00a0', true)}</Stack>;
+        if (segment.kind === 'shared') return <Stack key={index}>{lines(segment.lines, '', true)}</Stack>;
         conflict += 1;
         const at = conflict;
         return (
@@ -2069,10 +2089,11 @@ function Values(props: { tab: Exclude<Tab, 'fields'>; model: Model; chosen: Choi
 // the choice that makes a property instead of naming one; no target starts with +
 const NEW_PROPERTY = '+new';
 
-// A target as the person reads it: a field of the task, a section, or a property.
-function targetLabel(t: PluginHost['t'], target: string): string {
+// A target as the person reads it: a field of the task, a section by the title the task shows it under, or a property.
+function targetLabel(t: PluginHost['t'], target: string, sections: Record<string, string> = {}): string {
   const [head, name = ''] = target.split(/:(.*)/s);
-  if (head === 'section' || head === 'property') return t(`target_${head}`, { name });
+  if (head === 'section') return t('target_section', { name: sections[name] ?? sideName(target) });
+  if (head === 'property') return t('target_property', { name });
   return t(`target_${target}`);
 }
 
@@ -2168,7 +2189,7 @@ function Fields(props: { model: Model; chosen: Choice; setChosen: (next: Choice)
                   <option value="">{t('notCarried')}</option>
                   {field.targets.map((target) => (
                     <option key={target} value={target}>
-                      {targetLabel(t, target)}
+                      {targetLabel(t, target, model.backlog.sections)}
                     </option>
                   ))}
                   <option value={NEW_PROPERTY}>{t('newProperty')}</option>
@@ -2189,7 +2210,7 @@ function Fields(props: { model: Model; chosen: Choice; setChosen: (next: Choice)
                     .slice(1)
                     .map((eidos) => (
                       <Row key={eidos}>
-                        <Badge>{targetLabel(t, eidos)}</Badge>
+                        <Badge>{targetLabel(t, eidos, model.backlog.sections)}</Badge>
                         <Button size="sm" variant="quiet" onClick={() => setPlaces(field.id, (held) => held.filter((each) => each !== eidos))}>
                           {t('bundleRemove')}
                         </Button>
@@ -2209,7 +2230,7 @@ function Fields(props: { model: Model; chosen: Choice; setChosen: (next: Choice)
                         .filter((target) => target.startsWith('section:') && !placesOf(type, field.id).includes(target))
                         .map((target) => (
                           <option key={target} value={target}>
-                            {targetLabel(t, target)}
+                            {targetLabel(t, target, model.backlog.sections)}
                           </option>
                         ))}
                     </Select>

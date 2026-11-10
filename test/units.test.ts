@@ -228,6 +228,9 @@ test('Jira REQ12: the editor starts from the held pairs, else the suggestions, a
   );
   assert.deepEqual(fresh.types[1]!.fields.find((field) => field.id === 'customfield_10040')?.property, { type: 'Date' });
   assert.ok(!fresh.types[0]!.fields.find((field) => field.id === 'customfield_10016')!.targets.includes('title'), 'a number never goes to the title');
+  assert.deepEqual(fresh.backlog.sections, { description: 'Description' }, 'a section target reads by the title the task shows it under');
+  const titled = editorModel(connection(), { ...BOARD, types: [...BOARD.types, { name: 'story', title: 'Story', sections: [{ key: 'acceptance-criteria', title: 'Done when', type: 'checklist' }], prefix: 'S' }] }, TWO_TYPES);
+  assert.equal(titled.backlog.sections['acceptance-criteria'], 'Done when', "a type's own section by its title, not its key");
   const held = editorModel(connection({ types: [{ jira: 'Story', eidos: 'bug' }], statuses: [{ jira: 'Intake', eidos: 'Done' }] }), BOARD, TWO_TYPES);
   assert.equal(held.chosen.types['Story'], 'bug');
   assert.equal(held.chosen.types['Epic'], '', 'a type the held part leaves out is not carried');
