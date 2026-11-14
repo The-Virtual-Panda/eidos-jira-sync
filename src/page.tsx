@@ -237,8 +237,9 @@ interface SyncChoices {
 }
 
 const PARTS = ['types', 'statuses', 'priorities', 'link_types', 'fields'] as const;
-// the editor's tabs, statuses first as the part a person most often changes
-const TABS = ['statuses', 'types', 'priorities', 'link_types', 'fields'] as const;
+// the editor's tabs, statuses first as the part a person most often changes, and what Jira's rich-text fields are built
+// from beside the fields
+const TABS = ['statuses', 'types', 'priorities', 'link_types', 'fields', 'description'] as const;
 type Tab = (typeof TABS)[number];
 // the Backlog's property types a property made for a field may take (its Object is not one)
 const PROPERTY_TYPES = ['Text', 'List', 'Number', 'Checkbox', 'Date', 'Date & time'];
@@ -1722,10 +1723,37 @@ function MappingPage(props: { name: string }): JSX.Element {
     }
   };
 
+  // the issue type the Fields and Description tabs show, the same on both; the first that is not a sub-task until one is chosen
+  const [pickedType, setPickedType] = useState('');
+  const [together, setTogether] = useState(true);
+  // the fields held one for one offered to change, for this visit to the page only
+  const [advanced, setAdvanced] = useState(false);
+  const firstType = model?.types.find((each) => !each.subtask)?.name ?? model?.types[0]?.name ?? '';
+  const scope: TypeScope = {
+    type: model?.types.some((each) => each.name === pickedType) ? pickedType : firstType,
+    setType: setPickedType,
+    together,
+    setTogether,
+  };
+
   let body: JSX.Element;
   if (error) body = <Notice>{error}</Notice>;
   else if (!model || !chosen) body = <Reading stages={stages} />;
-  else if (tab === 'fields') body = <Fields model={model} chosen={chosen} setChosen={setChosen} setModel={setModel} connection={props.name} />;
+  else if (tab === 'fields')
+    body = (
+      <Fields
+        model={model}
+        chosen={chosen}
+        setChosen={setChosen}
+        setModel={setModel}
+        connection={props.name}
+        scope={scope}
+        advanced={advanced}
+        setAdvanced={setAdvanced}
+        onCompose={() => setTab('description')}
+      />
+    );
+  else if (tab === 'description') body = <Description model={model} chosen={chosen} setChosen={setChosen} scope={scope} onFields={() => setTab('fields')} />;
   else body = <Values tab={tab} model={model} chosen={chosen} setChosen={setChosen} />;
   return (
     <Page width="narrow" data-testid="jira-mapping">
@@ -2000,7 +2028,7 @@ function Reading(props: { stages: Stage[] }): JSX.Element {
 }
 
 // Issue types, statuses, priorities, or link types: a row per Jira value, "maps to", and the Backlog's values.
-function Values(props: { tab: Exclude<Tab, 'fields'>; model: Model; chosen: Choice; setChosen: (next: Choice) => void }): JSX.Element {
+function Values(props: { tab: Exclude<Tab, 'fields' | 'description'>; model: Model; chosen: Choice; setChosen: (next: Choice) => void }): JSX.Element {
   const { t } = usePluginHost();
   const { model, chosen, tab } = props;
   const set = (jira: string, eidos: string): void => props.setChosen({ ...chosen, [tab]: { ...chosen[tab], [jira]: eidos } });
@@ -2097,29 +2125,102 @@ function targetLabel(t: PluginHost['t'], target: string, sections: Record<string
   return t(`target_${target}`);
 }
 
-// One issue type's fields at a time, each mapped to where it lands on a task; a change goes to every issue type
-// holding the field unless the person keeps it to this one.
-function Fields(props: { model: Model; chosen: Choice; setChosen: (next: Choice) => void; setModel: (next: Model) => void; connection: string }): JSX.Element {
-  const host = usePluginHost();
-  const { t } = host;
-  const { model, chosen } = props;
-  const [type, setType] = useState(model.types.find((each) => !each.subtask)?.name ?? model.types[0]?.name ?? '');
-  const [together, setTogether] = useState(true);
-  const [making, setMaking] = useState<{ field: EditorField; name: string; type: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const shown = model.types.find((each) => each.name === type);
-  // every place a field goes for a type, in order: the first is where it maps, the rest the sections bundled into it (Jira REQ21)
+// Jira's own fields first, in the order a person reads an issue; the rest of Jira's after them by name. A site's custom
+// fields come after all of Jira's, by name, Jira itself listing every field by its id.
+const READING_ORDER = ['status', 'summary', 'description', 'priority', 'assignee', 'reporter', 'labels', 'components', 'fixVersions', 'versions', 'duedate', 'parent', 'environment', 'timetracking'];
+const isCustom = (field: EditorField): boolean => field.id.startsWith('customfield_');
+const byName = (a: EditorField, b: EditorField): number => a.name.localeCompare(b.name);
+function inReadingOrder(fields: EditorField[]): { own: EditorField[]; custom: EditorField[] } {
+  const rank = (field: EditorField): number => {
+    const at = READING_ORDER.indexOf(field.id);
+    return at === -1 ? READING_ORDER.length : at;
+  };
+  return {
+    own: fields.filter((field) => !isCustom(field)).sort((a, b) => rank(a) - rank(b) || byName(a, b)),
+    custom: fields.filter(isCustom).sort(byName),
+  };
+}
+// a field as the person reads it: Jira gives a custom field no name now and then, which its id stands in for
+const fieldName = (t: PluginHost['t'], field: EditorField): string => field.name.trim() || t('unnamedField', { id: field.id });
+
+// Where a field goes on a task, per issue type, and changing it: for the type shown alone, or for every type holding the
+// field while they change together. A field's first place is where it maps; any after it are the sections bundled into
+// it (Jira REQ21), in the order Jira's text holds them.
+function placements(model: Model, chosen: Choice, setChosen: (next: Choice) => void, type: string, together: boolean) {
   const placesOf = (typeName: string, jira: string): string[] => chosen.fields.filter((pair) => pair.type === typeName && pair.jira === jira).map((pair) => pair.eidos);
   const placeOf = (typeName: string, jira: string): string => placesOf(typeName, jira)[0] ?? '';
   const setPlaces = (jira: string, places: (held: string[]) => string[]): void => {
     const over = together ? model.types.filter((each) => each.fields.some((field) => field.id === jira)).map((each) => each.name) : [type];
     const rest = chosen.fields.filter((pair) => !(pair.jira === jira && over.includes(pair.type)));
     const next = over.flatMap((each) => [...new Set(places(placesOf(each, jira)))].filter(Boolean).map((eidos) => ({ type: each, jira, eidos })));
-    props.setChosen({ ...chosen, fields: [...rest, ...next] });
+    setChosen({ ...chosen, fields: [...rest, ...next] });
   };
-  // the field mapped elsewhere keeps the sections bundled into it while it goes to a section; anywhere else it goes alone
+  // a field mapped to a section keeps the sections bundled into it; anywhere else it goes alone
   const setPlace = (jira: string, eidos: string): void =>
-    setPlaces(jira, (held) => (eidos === '' ? [] : eidos.startsWith('section:') ? [eidos, ...held.slice(1).filter((each) => each !== eidos)] : [eidos]));
+    setPlaces(jira, (held) => {
+      if (eidos === '') return [];
+      if (!eidos.startsWith('section:')) return [eidos];
+      return [eidos, ...held.slice(1).filter((each) => each !== eidos)];
+    });
+  return { placesOf, placeOf, setPlaces, setPlace };
+}
+
+// The issue type a tab shows, and whether a change goes to every type holding the field; one choice for both tabs.
+function TypePicker(props: { model: Model; type: string; setType: (next: string) => void; together: boolean; setTogether: (next: boolean) => void }): JSX.Element {
+  const { t } = usePluginHost();
+  return (
+    <Row wrap>
+      <Text size="sm" tone="muted">
+        {t('fieldsOf')}
+      </Text>
+      <Select aria-label={t('fieldsOf')} value={props.type} onChange={(event: { target: HTMLSelectElement }) => props.setType(event.target.value)}>
+        {props.model.types.map((each) => (
+          <option key={each.name} value={each.name}>
+            {each.name}
+          </option>
+        ))}
+      </Select>
+      <Switch checked={props.together} aria-label={t('together')} onChange={(event: { currentTarget: HTMLInputElement }) => props.setTogether(event.currentTarget.checked)} />
+      <Text size="sm">{t('together')}</Text>
+    </Row>
+  );
+}
+
+interface TypeScope {
+  type: string;
+  setType: (next: string) => void;
+  together: boolean;
+  setTogether: (next: boolean) => void;
+}
+
+// The fields Jira and the Backlog both hold, one for one: each goes to its own place on a task, which only Advanced setup
+// changes. A held mapping that sends one elsewhere is shown as it is, and can be changed back.
+const ONE_TO_ONE: Record<string, string> = { summary: 'title', status: 'status', priority: 'priority', assignee: 'assignee', parent: 'parent' };
+
+// One issue type's fields at a time, each mapped to where it lands on a task; a change goes to every issue type
+// holding the field unless the person keeps it to this one. A field held one for one is shown, not offered, until
+// Advanced setup is on. A rich-text field built from several sections says so, and leads to the Description tab, where
+// they are put in order.
+function Fields(props: {
+  model: Model;
+  chosen: Choice;
+  setChosen: (next: Choice) => void;
+  setModel: (next: Model) => void;
+  connection: string;
+  scope: TypeScope;
+  advanced: boolean;
+  setAdvanced: (next: boolean) => void;
+  onCompose: () => void;
+}): JSX.Element {
+  const host = usePluginHost();
+  const { t } = host;
+  const { model, chosen } = props;
+  const { type, together } = props.scope;
+  const [making, setMaking] = useState<{ field: EditorField; name: string; type: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const shown = model.types.find((each) => each.name === type);
+  const { placesOf, placeOf, setPlace } = placements(model, chosen, props.setChosen, type, together);
+  const sections = model.backlog.sections ?? {};
   const differs = (jira: string): boolean => new Set(model.types.filter((each) => each.fields.some((field) => field.id === jira)).map((each) => placeOf(each.name, jira))).size > 1;
   const create = async (): Promise<void> => {
     if (!making) return;
@@ -2142,137 +2243,273 @@ function Fields(props: { model: Model; chosen: Choice; setChosen: (next: Choice)
     }
   };
   if (!shown) return <Text tone="faint">{t('noTypes')}</Text>;
+  const { own, custom } = inReadingOrder(shown.fields);
+  const rows = (field: EditorField): Array<JSX.Element | null> => {
+    const name = fieldName(t, field);
+    const bundled = placesOf(type, field.id).slice(1);
+    const composed = field.kind === 'doc' && placeOf(type, field.id).startsWith('section:');
+    const own = ONE_TO_ONE[field.id];
+    const fixed = !props.advanced && own !== undefined && placeOf(type, field.id) === own && !differs(field.id);
+    return [
+      <SettingRow
+        key={field.id}
+        label={name}
+        hint={t(isCustom(field) ? 'customFieldHint' : 'fieldHint', { id: field.id, kind: t(`kind_${field.kind}`) })}
+        badge={differs(field.id) ? <Badge>{t('differs')}</Badge> : null}
+        control={
+          fixed ? (
+            <Row data-testid={`jira-fixed-${field.id}`}>
+              <Text size="sm" tone="muted">
+                {t('mapsTo')}
+              </Text>
+              <Text size="sm" weight="strong">
+                {targetLabel(t, own, sections)}
+              </Text>
+            </Row>
+          ) : (
+            <Row>
+              <Text size="sm" tone="muted">
+                {t('mapsTo')}
+              </Text>
+              <Select
+                aria-label={t('mapsToLabel', { jira: name })}
+                value={placeOf(type, field.id)}
+                onChange={(event: { target: HTMLSelectElement }) => {
+                  if (event.target.value === NEW_PROPERTY)
+                    setMaking({
+                      field,
+                      name: name
+                        .replace(/[^A-Za-z0-9_-]+/g, '_')
+                        .replace(/^_+|_+$/g, '')
+                        .toLowerCase(),
+                      type: field.property.type,
+                    });
+                  else setPlace(field.id, event.target.value);
+                }}
+              >
+                <option value="">{t('notCarried')}</option>
+                {field.targets.map((target) => (
+                  <option key={target} value={target}>
+                    {targetLabel(t, target, sections)}
+                  </option>
+                ))}
+                <option value={NEW_PROPERTY}>{t('newProperty')}</option>
+              </Select>
+            </Row>
+          )
+        }
+      />,
+      composed ? (
+        <SettingRow
+          key={`${field.id}:composed`}
+          label={bundled.length > 0 ? t('composedOf', { sections: bundled.map((eidos) => sections[eidos.slice('section:'.length)] ?? sideName(eidos)).join(', ') }) : t('composedAlone')}
+          hint={t('composedHint', { field: name })}
+          data-testid={`jira-composed-${field.id}`}
+          control={
+            <Button size="sm" onClick={props.onCompose}>
+              {t('composeOpen')}
+            </Button>
+          }
+        />
+      ) : null,
+      making?.field.id === field.id ? (
+        <SettingRow
+          key={`${field.id}:new`}
+          stacked
+          data-testid="jira-new-property"
+          label={t('newPropertyTitle', { field: name })}
+          hint={making.field.property.options ? t('propertyOptions', { options: making.field.property.options.join(', ') }) : null}
+          control={
+            <Row wrap>
+              <Input
+                aria-label={t('propertyName')}
+                placeholder={t('propertyName')}
+                value={making.name}
+                onChange={(event: { target: HTMLInputElement }) => setMaking({ ...making, name: event.target.value })}
+              />
+              <Select aria-label={t('propertyType')} value={making.type} onChange={(event: { target: HTMLSelectElement }) => setMaking({ ...making, type: event.target.value })}>
+                {PROPERTY_TYPES.map((each) => (
+                  <option key={each} value={each}>
+                    {each}
+                  </option>
+                ))}
+              </Select>
+              <Button variant="quiet" onClick={() => setMaking(null)}>
+                {t('cancel')}
+              </Button>
+              <Button variant="primary" disabled={busy || !making.name.trim()} onClick={() => void create()}>
+                {t('createProperty')}
+              </Button>
+            </Row>
+          }
+        />
+      ) : null,
+    ];
+  };
   return (
-    <Stack gap="sm">
+    <Stack gap="md">
+      <TypePicker model={model} {...props.scope} />
       <Row wrap>
+        <Switch
+          checked={props.advanced}
+          aria-label={t('advancedSetup')}
+          data-testid="jira-advanced"
+          onChange={(event: { currentTarget: HTMLInputElement }) => props.setAdvanced(event.currentTarget.checked)}
+        />
+        <Text size="sm">{t('advancedSetup')}</Text>
         <Text size="sm" tone="muted">
-          {t('fieldsOf')}
+          {t(props.advanced ? 'advancedOn' : 'advancedOff')}
         </Text>
-        <Select aria-label={t('fieldsOf')} value={type} onChange={(event: { target: HTMLSelectElement }) => setType(event.target.value)}>
-          {model.types.map((each) => (
-            <option key={each.name} value={each.name}>
-              {each.name}
-            </option>
-          ))}
-        </Select>
-        <Switch checked={together} aria-label={t('together')} onChange={(event: { currentTarget: HTMLInputElement }) => setTogether(event.currentTarget.checked)} />
-        <Text size="sm">{t('together')}</Text>
       </Row>
-      <Card variant="grouped">
-        {shown.fields.map((field) => [
-          <SettingRow
-            key={field.id}
-            label={field.name}
-            hint={t('fieldHint', { id: field.id, kind: t(`kind_${field.kind}`) })}
-            badge={differs(field.id) ? <Badge>{t('differs')}</Badge> : null}
-            control={
-              <Row>
-                <Text size="sm" tone="muted">
-                  {t('mapsTo')}
-                </Text>
-                <Select
-                  aria-label={t('mapsToLabel', { jira: field.name })}
-                  value={placeOf(type, field.id)}
-                  onChange={(event: { target: HTMLSelectElement }) => {
-                    if (event.target.value === NEW_PROPERTY)
-                      setMaking({
-                        field,
-                        name: field.name
-                          .replace(/[^A-Za-z0-9_-]+/g, '_')
-                          .replace(/^_+|_+$/g, '')
-                          .toLowerCase(),
-                        type: field.property.type,
-                      });
-                    else setPlace(field.id, event.target.value);
-                  }}
-                >
-                  <option value="">{t('notCarried')}</option>
-                  {field.targets.map((target) => (
-                    <option key={target} value={target}>
-                      {targetLabel(t, target, model.backlog.sections)}
-                    </option>
-                  ))}
-                  <option value={NEW_PROPERTY}>{t('newProperty')}</option>
-                </Select>
-              </Row>
-            }
-          />,
-          field.kind === 'doc' && placeOf(type, field.id).startsWith('section:') ? (
-            <SettingRow
-              key={`${field.id}:bundle`}
-              stacked
-              label={t('bundleLabel', { field: field.name })}
-              hint={t('bundleHint')}
-              data-testid={`jira-bundle-${field.id}`}
-              control={
-                <Row wrap>
-                  {placesOf(type, field.id)
-                    .slice(1)
-                    .map((eidos) => (
-                      <Row key={eidos}>
-                        <Badge>{targetLabel(t, eidos, model.backlog.sections)}</Badge>
-                        <Button size="sm" variant="quiet" onClick={() => setPlaces(field.id, (held) => held.filter((each) => each !== eidos))}>
+      <Stack gap="xs">
+        <SettingsHead>{t('jiraFields')}</SettingsHead>
+        <Card variant="grouped">{own.map(rows)}</Card>
+      </Stack>
+      {custom.length > 0 && (
+        <Stack gap="xs" data-testid="jira-custom-fields">
+          <SettingsHead>{t('customFields')}</SettingsHead>
+          <Card variant="grouped">{custom.map(rows)}</Card>
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
+// What each of an issue type's rich-text fields is built from (Jira REQ21): the section whose text leads it, then each
+// section after it under a heading of its title, in the order Jira's text holds them. A pull splits Jira's text back at
+// those headings, so the order here is the order on both sides.
+function Description(props: { model: Model; chosen: Choice; setChosen: (next: Choice) => void; scope: TypeScope; onFields: () => void }): JSX.Element {
+  const { t } = usePluginHost();
+  const { model, chosen } = props;
+  const { type, together } = props.scope;
+  const shown = model.types.find((each) => each.name === type);
+  const { placesOf, setPlaces } = placements(model, chosen, props.setChosen, type, together);
+  const sections = model.backlog.sections ?? {};
+  if (!shown) return <Text tone="faint">{t('noTypes')}</Text>;
+  const rich = inReadingOrder(shown.fields.filter((field) => field.kind === 'doc'));
+  const fields = [...rich.own, ...rich.custom];
+  const move = (jira: string, from: number, to: number): void =>
+    setPlaces(jira, (held) => {
+      const next = [...held];
+      const [moved] = next.splice(from, 1);
+      if (moved !== undefined) next.splice(to, 0, moved);
+      return next;
+    });
+  return (
+    <Stack gap="md">
+      <TypePicker model={model} {...props.scope} />
+      <Text size="sm" tone="muted" block>
+        {t('composeIntro')}
+      </Text>
+      {fields.length === 0 && <Text tone="faint">{t('composeNone', { type })}</Text>}
+      {fields.map((field) => {
+        const name = fieldName(t, field);
+        const places = placesOf(type, field.id);
+        const sectionTargets = field.targets.filter((target) => target.startsWith('section:'));
+        const free = sectionTargets.filter((target) => !places.includes(target));
+        const leads = places[0]?.startsWith('section:') === true;
+        return (
+          <Stack key={field.id} gap="xs" data-testid={`jira-compose-${field.id}`}>
+            <SettingsHead>{t('composeTitle', { field: name })}</SettingsHead>
+            <Card variant="grouped">
+              {!leads && (
+                <SettingRow
+                  label={places[0] ? t('composeElsewhere', { place: targetLabel(t, places[0], sections) }) : t('composeNotCarried')}
+                  hint={t('composeStartHint')}
+                  control={
+                    <Row>
+                      {places[0] && (
+                        <Button size="sm" variant="quiet" onClick={props.onFields}>
+                          {t('composeToFields')}
+                        </Button>
+                      )}
+                      {sectionTargets.length > 0 && (
+                        <Select
+                          aria-label={t('composeStart', { field: name })}
+                          value=""
+                          onChange={(event: { target: HTMLSelectElement }) => {
+                            const start = event.target.value;
+                            if (start) setPlaces(field.id, () => [start]);
+                          }}
+                        >
+                          <option value="">{t('composeStart', { field: name })}</option>
+                          {sectionTargets.map((target) => (
+                            <option key={target} value={target}>
+                              {targetLabel(t, target, sections)}
+                            </option>
+                          ))}
+                        </Select>
+                      )}
+                    </Row>
+                  }
+                />
+              )}
+              {leads &&
+                places.map((eidos, at) => (
+                  <SettingRow
+                    key={eidos}
+                    label={`${at + 1}. ${sections[eidos.slice('section:'.length)] ?? sideName(eidos)}`}
+                    hint={at === 0 ? t('composeLead') : t('composeHeading', { heading: `## ${sections[eidos.slice('section:'.length)] ?? sideName(eidos)}` })}
+                    data-testid={`jira-compose-${field.id}-${eidos}`}
+                    control={
+                      <Row>
+                        <Button size="sm" variant="quiet" disabled={at === 0} aria-label={t('composeUp', { section: targetLabel(t, eidos, sections) })} onClick={() => move(field.id, at, at - 1)}>
+                          {t('composeUpShort')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="quiet"
+                          disabled={at === places.length - 1}
+                          aria-label={t('composeDown', { section: targetLabel(t, eidos, sections) })}
+                          onClick={() => move(field.id, at, at + 1)}
+                        >
+                          {t('composeDownShort')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="quiet"
+                          disabled={places.length === 1}
+                          aria-label={t('composeRemove', { section: targetLabel(t, eidos, sections) })}
+                          onClick={() => setPlaces(field.id, (held) => held.filter((each) => each !== eidos))}
+                        >
                           {t('bundleRemove')}
                         </Button>
                       </Row>
-                    ))}
-                  {field.targets.some((target) => target.startsWith('section:') && !placesOf(type, field.id).includes(target)) && (
+                    }
+                  />
+                ))}
+              {leads && free.length > 0 && (
+                <SettingRow
+                  label={t('bundleAdd')}
+                  hint={t('composeAddHint')}
+                  control={
                     <Select
                       aria-label={t('bundleAdd')}
                       value=""
                       onChange={(event: { target: HTMLSelectElement }) => {
-                        const eidos = event.target.value;
-                        if (eidos) setPlaces(field.id, (held) => [...held, eidos]);
+                        const added = event.target.value;
+                        if (added) setPlaces(field.id, (held) => [...held, added]);
                       }}
                     >
                       <option value="">{t('bundleAdd')}</option>
-                      {field.targets
-                        .filter((target) => target.startsWith('section:') && !placesOf(type, field.id).includes(target))
-                        .map((target) => (
-                          <option key={target} value={target}>
-                            {targetLabel(t, target, model.backlog.sections)}
-                          </option>
-                        ))}
+                      {free.map((target) => (
+                        <option key={target} value={target}>
+                          {targetLabel(t, target, sections)}
+                        </option>
+                      ))}
                     </Select>
-                  )}
-                </Row>
-              }
-            />
-          ) : null,
-          making?.field.id === field.id ? (
-            <SettingRow
-              key={`${field.id}:new`}
-              stacked
-              data-testid="jira-new-property"
-              label={t('newPropertyTitle', { field: making.field.name })}
-              hint={making.field.property.options ? t('propertyOptions', { options: making.field.property.options.join(', ') }) : null}
-              control={
-                <Row wrap>
-                  <Input
-                    aria-label={t('propertyName')}
-                    placeholder={t('propertyName')}
-                    value={making.name}
-                    onChange={(event: { target: HTMLInputElement }) => setMaking({ ...making, name: event.target.value })}
-                  />
-                  <Select aria-label={t('propertyType')} value={making.type} onChange={(event: { target: HTMLSelectElement }) => setMaking({ ...making, type: event.target.value })}>
-                    {PROPERTY_TYPES.map((each) => (
-                      <option key={each} value={each}>
-                        {each}
-                      </option>
-                    ))}
-                  </Select>
-                  <Button variant="quiet" onClick={() => setMaking(null)}>
-                    {t('cancel')}
-                  </Button>
-                  <Button variant="primary" disabled={busy || !making.name.trim()} onClick={() => void create()}>
-                    {t('createProperty')}
-                  </Button>
-                </Row>
-              }
-            />
-          ) : null,
-        ])}
-      </Card>
+                  }
+                />
+              )}
+            </Card>
+            {leads && places.length > 1 && (
+              <Text size="xs" tone="faint" block>
+                {t('composePull')}
+              </Text>
+            )}
+          </Stack>
+        );
+      })}
     </Stack>
   );
 }
@@ -2286,113 +2523,126 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
   const folders = props.state.asset_folders;
   const chosenFolder = folders?.find((folder) => folder === settings.attachments_folder) ?? folders?.[0] ?? '';
   return (
-    <Stack gap="xs">
-      <SettingsHead>{t('options')}</SettingsHead>
-      <Card variant="grouped">
-        <SettingRow
-          label={t('pullAttachments')}
-          hint={folders === null ? t('pullAttachmentsOff') : t('pullAttachmentsHint', { folder: `${chosenFolder}/` })}
-          control={
-            <Switch
-              checked={settings.pull_attachments}
-              disabled={folders === null}
-              aria-label={t('pullAttachments')}
-              onChange={(event: { currentTarget: HTMLInputElement }) => write('pull_attachments', event.currentTarget.checked)}
-            />
-          }
-        />
-        {settings.pull_attachments && folders !== null && folders.length > 1 && (
+    <>
+      <Stack gap="xs">
+        <SettingsHead>{t('optionsPull')}</SettingsHead>
+        <Card variant="grouped">
           <SettingRow
-            label={t('attachmentsFolder')}
-            hint={t('attachmentsFolderHint')}
+            label={t('pullAttachments')}
+            hint={folders === null ? t('pullAttachmentsOff') : t('pullAttachmentsHint', { folder: `${chosenFolder}/` })}
             control={
-              <Select
-                aria-label={t('attachmentsFolder')}
-                value={chosenFolder}
-                onChange={(event: { target: HTMLSelectElement }) => write('attachments_folder', event.target.value)}
-                data-testid="jira-attachments-folder"
-              >
-                {folders.map((folder) => (
-                  <option key={folder} value={folder}>
-                    {folder}/
+              <Switch
+                checked={settings.pull_attachments}
+                disabled={folders === null}
+                aria-label={t('pullAttachments')}
+                onChange={(event: { currentTarget: HTMLInputElement }) => write('pull_attachments', event.currentTarget.checked)}
+              />
+            }
+          />
+          {settings.pull_attachments && folders !== null && folders.length > 1 && (
+            <SettingRow
+              label={t('attachmentsFolder')}
+              hint={t('attachmentsFolderHint')}
+              control={
+                <Select
+                  aria-label={t('attachmentsFolder')}
+                  value={chosenFolder}
+                  onChange={(event: { target: HTMLSelectElement }) => write('attachments_folder', event.target.value)}
+                  data-testid="jira-attachments-folder"
+                >
+                  {folders.map((folder) => (
+                    <option key={folder} value={folder}>
+                      {folder}/
+                    </option>
+                  ))}
+                </Select>
+              }
+            />
+          )}
+          <SettingRow
+            label={t('addPeople')}
+            hint={t('addPeopleHint')}
+            control={<Switch checked={settings.add_people} aria-label={t('addPeople')} onChange={(event: { currentTarget: HTMLInputElement }) => write('add_people', event.currentTarget.checked)} />}
+          />
+        </Card>
+      </Stack>
+      {props.state.backlog_boards !== null && (
+        <Stack gap="xs">
+          <SettingsHead>{t('optionsBoards')}</SettingsHead>
+          <Card variant="grouped">
+            <SettingRow
+              label={t('ownBoardSetting')}
+              hint={t('ownBoardSettingHint')}
+              control={
+                <Switch
+                  checked={settings.own_board}
+                  aria-label={t('ownBoardSetting')}
+                  data-testid="jira-own-board"
+                  onChange={(event: { currentTarget: HTMLInputElement }) => write('own_board', event.currentTarget.checked)}
+                />
+              }
+            />
+            <SettingRow
+              label={t('boardFolders')}
+              hint={t('boardFoldersHint')}
+              control={
+                <Switch
+                  checked={settings.board_folders}
+                  aria-label={t('boardFolders')}
+                  data-testid="jira-board-folders"
+                  onChange={(event: { currentTarget: HTMLInputElement }) => write('board_folders', event.currentTarget.checked)}
+                />
+              }
+            />
+          </Card>
+        </Stack>
+      )}
+      <Stack gap="xs">
+        <SettingsHead>{t('optionsAuto')}</SettingsHead>
+        <Text size="sm" tone="muted" block>
+          {t('optionsAutoHint')}
+        </Text>
+        <Card variant="grouped">
+          <SettingRow
+            label={t('autoFetch')}
+            hint={t('autoFetchHint')}
+            control={
+              <Select aria-label={t('autoFetch')} value={settings.auto_fetch} onChange={(event: { target: HTMLSelectElement }) => write('auto_fetch', event.target.value)}>
+                {['off', '5', '15', '30', '60'].map((value) => (
+                  <option key={value} value={value}>
+                    {value === 'off' ? t('autoFetchOff') : t('autoFetchEvery', { n: value })}
                   </option>
                 ))}
               </Select>
             }
           />
-        )}
-        <SettingRow
-          label={t('addPeople')}
-          hint={t('addPeopleHint')}
-          control={<Switch checked={settings.add_people} aria-label={t('addPeople')} onChange={(event: { currentTarget: HTMLInputElement }) => write('add_people', event.currentTarget.checked)} />}
-        />
-        {props.state.backlog_boards !== null && (
           <SettingRow
-            label={t('ownBoardSetting')}
-            hint={t('ownBoardSettingHint')}
+            label={t('autoSyncSave')}
+            hint={t('autoSyncSaveHint')}
             control={
               <Switch
-                checked={settings.own_board}
-                aria-label={t('ownBoardSetting')}
-                data-testid="jira-own-board"
-                onChange={(event: { currentTarget: HTMLInputElement }) => write('own_board', event.currentTarget.checked)}
+                checked={settings.auto_sync_on_save}
+                aria-label={t('autoSyncSave')}
+                data-testid="jira-auto-sync-save"
+                onChange={(event: { currentTarget: HTMLInputElement }) => write('auto_sync_on_save', event.currentTarget.checked)}
               />
             }
           />
-        )}
-        {props.state.backlog_boards !== null && (
           <SettingRow
-            label={t('boardFolders')}
-            hint={t('boardFoldersHint')}
+            label={t('autoSyncPush')}
+            hint={t('autoSyncPushHint')}
             control={
               <Switch
-                checked={settings.board_folders}
-                aria-label={t('boardFolders')}
-                data-testid="jira-board-folders"
-                onChange={(event: { currentTarget: HTMLInputElement }) => write('board_folders', event.currentTarget.checked)}
+                checked={settings.auto_sync_on_push}
+                aria-label={t('autoSyncPush')}
+                data-testid="jira-auto-sync-push"
+                onChange={(event: { currentTarget: HTMLInputElement }) => write('auto_sync_on_push', event.currentTarget.checked)}
               />
             }
           />
-        )}
-        <SettingRow
-          label={t('autoFetch')}
-          hint={t('autoFetchHint')}
-          control={
-            <Select aria-label={t('autoFetch')} value={settings.auto_fetch} onChange={(event: { target: HTMLSelectElement }) => write('auto_fetch', event.target.value)}>
-              {['off', '5', '15', '30', '60'].map((value) => (
-                <option key={value} value={value}>
-                  {value === 'off' ? t('autoFetchOff') : t('autoFetchEvery', { n: value })}
-                </option>
-              ))}
-            </Select>
-          }
-        />
-        <SettingRow
-          label={t('autoSyncSave')}
-          hint={t('autoSyncSaveHint')}
-          control={
-            <Switch
-              checked={settings.auto_sync_on_save}
-              aria-label={t('autoSyncSave')}
-              data-testid="jira-auto-sync-save"
-              onChange={(event: { currentTarget: HTMLInputElement }) => write('auto_sync_on_save', event.currentTarget.checked)}
-            />
-          }
-        />
-        <SettingRow
-          label={t('autoSyncPush')}
-          hint={t('autoSyncPushHint')}
-          control={
-            <Switch
-              checked={settings.auto_sync_on_push}
-              aria-label={t('autoSyncPush')}
-              data-testid="jira-auto-sync-push"
-              onChange={(event: { currentTarget: HTMLInputElement }) => write('auto_sync_on_push', event.currentTarget.checked)}
-            />
-          }
-        />
-      </Card>
-    </Stack>
+        </Card>
+      </Stack>
+    </>
   );
 }
 
