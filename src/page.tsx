@@ -23,6 +23,8 @@ import {
   PageText,
   PageTitle,
   Row,
+  SaveActions,
+  SaveNotice,
   Seg,
   SegItem,
   Select,
@@ -33,10 +35,12 @@ import {
   Switch,
   Text,
   Textarea,
+  useDirty,
   useFileChanges,
   useOpen,
   usePluginEvent,
   usePluginHost,
+  type Dirty,
   type PagePlugin,
   type PluginHost,
 } from 'eidosmd/page';
@@ -246,6 +250,35 @@ const PROPERTY_TYPES = ['Text', 'List', 'Number', 'Checkbox', 'Date', 'Date & ti
 
 // a refusal's words, as the host's error carries them
 const reason = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
+
+// useDirty, SaveActions, and SaveNotice came with Eidos MD 0.26.0: on it, the mapping's unsaved changes are held as
+// every page's unsaved work is, and every way out (Back included) asks Save, Discard, or Keep editing. An older host
+// has none of them, so there the page keeps asking as it did, before Back to settings and Read again only.
+const KIT_DRAFTS = typeof useDirty === 'function' && typeof SaveActions === 'function' && typeof SaveNotice === 'function';
+type DraftOptions = Parameters<typeof useDirty>[0];
+const useDraft: (options: DraftOptions) => Dirty = KIT_DRAFTS ? (options) => useDirty(options) : usePlainDraft;
+
+function usePlainDraft(options: DraftOptions): Dirty {
+  const host = usePluginHost();
+  const { t } = host;
+  const [saving, setSaving] = useState(false);
+  const save = async (): Promise<boolean> => {
+    setSaving(true);
+    try {
+      return (await options.save()) !== false;
+    } catch (cause) {
+      host.toast(t('failed'), 'error', reason(cause));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+  const leave = (then: () => void): void => {
+    if (!options.dirty) then();
+    else void host.dialog.confirm(t('unsavedAsk'), { title: t('unsavedTitle'), ok: t('discard'), danger: true }).then((ok) => ok && then());
+  };
+  return { dirty: options.dirty, saving, failed: null, saved: false, save, discard: options.discard, leave };
+}
 const mappedCount = (connection: ConnectionRow): number => PARTS.reduce((sum, part) => sum + (Array.isArray(connection.mapping[part]) ? (connection.mapping[part] as Pair[]).length : 0), 0);
 const planCount = (plan: Plan): number => plan.add.length + plan.change.length + plan.gone.length;
 // A field as a person names it: section:description is Description, property:story-points is Story points.
@@ -1656,7 +1689,6 @@ function MappingPage(props: { name: string }): JSX.Element {
   const [stages, setStages] = useState<Stage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('statuses');
-  const [saving, setSaving] = useState(false);
   const hostRef = useHostRef(host);
   const read = useCallback(
     (refresh: boolean) => {
@@ -1686,9 +1718,7 @@ function MappingPage(props: { name: string }): JSX.Element {
   const AskAgent = host.plugins.includes('agent') ? host.plugin?.<AgentPageApi>('agent')?.AskAgent : undefined;
   const boardTitle = model?.title ?? props.name;
   // matching writes the mapping too, so mapping edits not saved yet are asked about first
-  const startMatch = async (): Promise<void> => {
-    if (await leaveUnsaved()) setMatching(true);
-  };
+  const startMatch = (): void => draft.leave(() => setMatching(true));
   useEffect(() => {
     if (!model || !AskAgent) return;
     let live = true;
@@ -1700,28 +1730,23 @@ function MappingPage(props: { name: string }): JSX.Element {
       live = false;
     };
   }, [hostRef, props.name, model, AskAgent]);
-  const leaveUnsaved = async (): Promise<boolean> => !unsaved || host.dialog.confirm(t('unsavedAsk'), { title: t('unsavedTitle'), ok: t('discard'), danger: true });
-  const back = async (): Promise<void> => {
-    if (await leaveUnsaved()) host.navigate('/plugins/jira-sync');
-  };
-  const readAgain = async (): Promise<void> => {
-    if (await leaveUnsaved()) read(true);
-  };
-
-  const save = async (): Promise<void> => {
-    if (!chosen) return;
-    setSaving(true);
-    try {
+  // the mapping's changes not saved yet, which every way out of the page asks about first (Unsaved Changes)
+  const draft = useDraft({
+    dirty: unsaved,
+    title: t('mappingTitle', { name: boardTitle }),
+    save: async () => {
+      if (!chosen) return true;
       const answer = await host.put<{ problems: Array<{ message: string }>; state: State }>('mapping', { name: props.name, mapping: chosen });
       setSaved(chosen);
       if (answer.problems.length > 0) host.toast(t('mappingProblems', { n: answer.problems.length }), 'error', answer.problems[0]!.message);
-      else host.toast(t('mappingSaved'), 'success', props.name);
-    } catch (cause) {
-      host.toast(t('failed'), 'error', reason(cause));
-    } finally {
-      setSaving(false);
-    }
-  };
+      else if (!KIT_DRAFTS) host.toast(t('mappingSaved'), 'success', props.name);
+      return true;
+    },
+    discard: () => setChosen(saved),
+  });
+  // on 0.26.0 the host asks as the page is left; an older host asks here
+  const back = (): void => draft.leave(() => host.navigate('/plugins/jira-sync'));
+  const readAgain = (): void => draft.leave(() => read(true));
 
   // the issue type the Fields and Description tabs show, the same on both; the first that is not a sub-task until one is chosen
   const [pickedType, setPickedType] = useState('');
@@ -1760,7 +1785,7 @@ function MappingPage(props: { name: string }): JSX.Element {
       <PageHead sticky>
         <Stack gap="sm">
           <Row>
-            <Button size="sm" variant="quiet" onClick={() => void back()}>
+            <Button size="sm" variant="quiet" onClick={back}>
               {t('backToSettings')}
             </Button>
           </Row>
@@ -1769,16 +1794,20 @@ function MappingPage(props: { name: string }): JSX.Element {
               <PageTitle>{t('mappingTitle', { name: model?.title ?? props.name })}</PageTitle>
               <PageText>
                 {model ? t('readFrom', { date: new Date(model.read).toLocaleString() }) : t('readingBoard')}
-                {unsaved ? ` · ${t('unsaved')}` : ''}
+                {unsaved && !KIT_DRAFTS ? ` · ${t('unsaved')}` : ''}
               </PageText>
             </Stack>
             <Row>
-              <Button variant="quiet" disabled={!model} onClick={() => void readAgain()}>
+              <Button variant="quiet" disabled={!model} onClick={readAgain}>
                 {t('readAgain')}
               </Button>
-              <Button variant="primary" disabled={saving || !unsaved} onClick={() => void save()} data-testid="jira-save-mapping">
-                {t(saving ? 'savingMapping' : 'saveMapping')}
-              </Button>
+              {KIT_DRAFTS ? (
+                <SaveActions draft={draft} />
+              ) : (
+                <Button variant="primary" disabled={draft.saving || !unsaved} onClick={() => void draft.save()} data-testid="jira-save-mapping">
+                  {t(draft.saving ? 'savingMapping' : 'saveMapping')}
+                </Button>
+              )}
             </Row>
           </Row>
           {model && (
@@ -1793,12 +1822,13 @@ function MappingPage(props: { name: string }): JSX.Element {
         </Stack>
       </PageHead>
       <Stack gap="md">
+        {KIT_DRAFTS && <SaveNotice draft={draft} />}
         {model && (
           <Notice>
             <Stack gap="sm">
               <Text size="sm">{t('backlogFirst')}</Text>
               <Row wrap>
-                <Button size="sm" variant="primary" onClick={() => void startMatch()} data-testid="jira-match">
+                <Button size="sm" variant="primary" onClick={startMatch} data-testid="jira-match">
                   {t('matchOpen')}
                 </Button>
                 {AskAgent && ask && <AskAgent label={t('matchWithAi')} title={ask.title} text={ask.text} data-testid="jira-match-ai" />}

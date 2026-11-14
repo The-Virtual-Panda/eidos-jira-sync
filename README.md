@@ -52,7 +52,7 @@ The plugin's settings page holds everything about how it works in this root, top
 
 ## The mapping page
 
-Each board has a mapping page, from **Edit mapping**: where Jira's words become yours. Its tabs are **Statuses**, **Issue types**, **Priorities**, **Link types**, **Fields**, and **Description**. Each row is one Jira value or field, and **maps to** says where it lands in the Backlog; **Not carried** leaves it in Jira. Nothing changes until you choose **Save mapping**, and leaving with changes unsaved asks first.
+Each board has a mapping page, from **Edit mapping**: where Jira's words become yours. Its tabs are **Statuses**, **Issue types**, **Priorities**, **Link types**, **Fields**, and **Description**. Each row is one Jira value or field, and **maps to** says where it lands in the Backlog; **Not carried** leaves it in Jira. Nothing changes until you choose **Save mapping**, and leaving with changes unsaved asks first. On Eidos MD 0.26.0 or later every way out asks the same way, Back and another tab included: **Save**, **Discard**, or **Keep editing**, and the head shows **Unsaved changes** with **Discard** and **Save**. On an older Eidos MD, **Back to settings** and **Read again** ask.
 
 If your Backlog doesn't have Jira's statuses, types, or priorities yet, **Match the Backlog to Jira…** at the top adds them for you (see [Match the Backlog to Jira](#match-the-backlog-to-jira)).
 
