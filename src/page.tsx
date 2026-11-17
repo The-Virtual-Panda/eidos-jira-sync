@@ -897,14 +897,16 @@ function useTaskLink(again: unknown): TaskLink | null {
 
 // A section changed on both sides merged as a git merge conflict is (Jira Sync REQ18): the lines both hold, muted, and
 // each place the two differ a conflict of its own, kept as Jira's, the task's, or both; the merged text shown as it
-// builds, and editable before it is used.
+// builds, and editable before it is used. No conflict starts picked: each one is the person's to decide, and the merge
+// is used only once every one is.
 function MergeEditor(props: { jira: string; here: string; onUse: (text: string) => void; onCancel: () => void }): JSX.Element {
   const { t } = usePluginHost();
   const segments = useMemo(() => segmentsOf(props.jira, props.here), [props.jira, props.here]);
   const count = segments.filter((segment) => segment.kind === 'conflict').length;
-  const [picks, setPicks] = useState<Pick[]>(() => new Array<Pick>(count).fill('both'));
+  const [picks, setPicks] = useState<Array<Pick | null>>(() => new Array<Pick | null>(count).fill(null));
   const [edited, setEdited] = useState<string | null>(null);
-  const merged = edited ?? mergeText(segments, (index) => picks[index] ?? 'both');
+  const merged = edited ?? mergeText(segments, (index) => picks[index] ?? null, (index) => [t('conflictUnpicked', { n: index + 1 })]);
+  const left = picks.filter((held) => held === null).length;
   const pick = (index: number, chosen: Pick): void => {
     setPicks(picks.map((held, at) => (at === index ? chosen : held)));
     setEdited(null);
@@ -971,7 +973,12 @@ function MergeEditor(props: { jira: string; here: string; onUse: (text: string) 
         <Button size="sm" variant="quiet" onClick={props.onCancel}>
           {t('cancel')}
         </Button>
-        <Button size="sm" variant="primary" disabled={merged.trim() === ''} onClick={() => props.onUse(merged)} data-testid="jira-merge-use">
+        {left > 0 && (
+          <Text size="sm" tone="faint" grow>
+            {t(left === 1 ? 'mergeLeftOne' : 'mergeLeft', { n: left })}
+          </Text>
+        )}
+        <Button size="sm" variant="primary" disabled={left > 0 || merged.trim() === ''} onClick={() => props.onUse(merged)} data-testid="jira-merge-use">
           {t('mergeUse')}
         </Button>
       </Row>

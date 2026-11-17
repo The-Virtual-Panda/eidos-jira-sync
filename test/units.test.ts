@@ -312,6 +312,11 @@ test('Jira Sync REQ18: two texts split into the lines both hold and the conflict
     mergeText(segmentsOf('a\nb\nc', 'a\nc'), () => 'eidos'),
     'a\nc',
   );
+  assert.equal(
+    mergeText(segments, () => null, (n) => [`(conflict ${n + 1} not picked)`]),
+    '- [ ] #1 Shared\n(conflict 1 not picked)',
+    'a conflict not picked yet keeps neither side, only what stands for it',
+  );
 });
 
 test('Jira Sync REQ19, REQ20: auto sync waits for a task’s saves to settle, syncs what was edited here once a push is heard, and puts what it stops on in Needs you', async (t) => {

@@ -48,13 +48,15 @@ export function segmentsOf(jira: string, here: string): Segment[] {
   return out;
 }
 
-// The merged text, each conflict settled by its pick (both: Jira's lines, then the task's).
-export function mergeText(segments: Segment[], pick: (conflict: number) => Pick): string {
+// The merged text, each conflict settled by its pick (both: Jira's lines, then the task's). A conflict not picked yet
+// (null) stands as the lines `unpicked` gives for it, so the result shows what is still to decide.
+export function mergeText(segments: Segment[], pick: (conflict: number) => Pick | null, unpicked: (conflict: number) => string[] = () => []): string {
   let conflict = -1;
   const lines = segments.flatMap((segment) => {
     if (segment.kind === 'shared') return segment.lines;
     conflict += 1;
     const chosen = pick(conflict);
+    if (chosen === null) return unpicked(conflict);
     if (chosen === 'jira') return segment.jira;
     if (chosen === 'eidos') return segment.here;
     return [...segment.jira, ...segment.here];
