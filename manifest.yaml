@@ -28,6 +28,11 @@ settings:
     scope: root
     default: false
     meaning: add each person a pull finds whom the root does not have (an assignee, a comment's author, a person mentioned) to the root's users; off, they keep the name Jira gives them
+  - name: key_property
+    type: text
+    scope: root
+    default: ''
+    meaning: "the Text property each linked task holds its Jira key in, so the Backlog's table and a bulk edit show it; empty, the key is written to no property"
   - name: own_board
     type: checkbox
     scope: root

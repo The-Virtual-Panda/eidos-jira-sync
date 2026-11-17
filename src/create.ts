@@ -33,6 +33,7 @@ import {
   type Issue,
 } from './pull.ts';
 import { accountFor, copySide, moveToSprint, priorityOut, SyncRefused, valueOut, type Blocker, type EditField } from './sync.ts';
+import { keyedProperties } from './keyed.ts';
 import { carriesSprints, indexFromBacklog } from './sprints.ts';
 import type { TaskFields, TaskView } from './types.ts';
 
@@ -397,6 +398,8 @@ async function link(context: Context, task: TaskView, ref: { id: string; key: st
     digest: Object.fromEntries(Object.entries(digest).sort(([a], [b]) => a.localeCompare(b))),
     remote: Object.fromEntries(Object.entries(remote).sort(([a], [b]) => a.localeCompare(b))),
   };
+  const keyed = keyedProperties(context.host, backlog, connection, task, issue.key);
+  if (Object.keys(keyed).length > 0) filled.properties = { ...(filled.properties ?? {}), ...keyed };
   const written = backlog.set(name, { ...filled, tool: { 'jira-sync': jira } });
   // the digest of a side taken from Jira as the task holds it once written, as a pull settles one
   if (settledHere.length > 0) {

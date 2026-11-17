@@ -44,6 +44,7 @@ import {
   type JiraUser,
 } from './pull.ts';
 import { carriesSprints, heldSprints, holdFor, indexFromBacklog, readBoardSprints, SPRINT_SIDE, sprintNames, type SprintIndex } from './sprints.ts';
+import { keyedProperties } from './keyed.ts';
 import type { BacklogApi, BoardSettings, TaskFields, TaskView, ThreadView } from './types.ts';
 
 // ---- the plan ---------------------------------------------------------------------
@@ -1002,7 +1003,8 @@ export async function apply(context: Context, prepared: Prepared): Promise<SyncD
   }
   // the pull's own `updated` is kept as it was: a later pull still reads the issue, since what others changed alongside
   // this sync (a comment, a link) is the pull's to bring in, and finds the fields this sync settled level
-  backlog.set(name, { tool: { 'jira-sync': { ...heldOf(written)!, key: after.key, ...(held.updated ? { updated: held.updated } : {}), digest: sorted(digest), remote: sorted(remote) } } });
+  const keyed = keyedProperties(context.host, backlog, context.connection, written, after.key);
+  backlog.set(name, { ...(Object.keys(keyed).length > 0 ? { properties: keyed } : {}), tool: { 'jira-sync': { ...heldOf(written)!, key: after.key, ...(held.updated ? { updated: held.updated } : {}), digest: sorted(digest), remote: sorted(remote) } } });
   rmSync(journalFile(context.host.workspace, held.id), { force: true });
   return done;
 }

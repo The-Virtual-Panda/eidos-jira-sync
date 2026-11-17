@@ -17,6 +17,7 @@ import { cachedDescription, categoryOf } from './describe.ts';
 import { bundlesOf, checklistFromJira, partPairs, realField as realFieldOf, sectionOf, splitIssue } from './bundle.ts';
 import { backlogCategory, DEFAULT_TYPE, fieldsFor, fieldsOf, linkTypeFor, priorityFor, statusFor, typeFor } from './mapping.ts';
 import type { AssetsApi, BacklogApi, BoardSettings, CommentsApi, TaskFields, TaskView, ThreadView } from './types.ts';
+import { keyedProperties } from './keyed.ts';
 import { lift } from './pause.ts';
 import {
   carriesSprints,
@@ -736,9 +737,11 @@ export async function run(context: Context, write: boolean, options: PullOptions
       ...(was?.connection ? { connection: was.connection } : {}),
     };
     const dates = { ...(moment(issue.fields.updated) ? { updated: moment(issue.fields.updated)! } : {}) };
+    const keyed = keyedProperties(context.host, backlog, connection, task, issue.key);
     let written: TaskView;
     if (!task) {
       const created = moment(issue.fields.created);
+      if (Object.keys(keyed).length > 0) fields.properties = { ...(fields.properties ?? {}), ...keyed };
       const make = { ...fields, title: fields.title ?? issue.key, ...(onto ? { board: onto.name } : {}), ...dates, ...(created ? { created } : {}), tool: { 'jira-sync': jira } };
       if (make.parent) written = backlog.create(make);
       else {
@@ -759,6 +762,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
       }
       if (fields.sections && Object.keys(fields.sections).length === 0) delete fields.sections;
       if (fields.properties && Object.keys(fields.properties).length === 0) delete fields.properties;
+      if (Object.keys(keyed).length > 0) fields.properties = { ...(fields.properties ?? {}), ...keyed };
       written = backlog.set(task.id ?? task.name, { ...fields, ...dates, tool: { 'jira-sync': jira } });
       // counted when anything of the task was written, a reference pointed at a file just downloaded included
       if (Object.keys(fields).length > 0 || was?.key !== issue.key || was?.gone !== undefined) done.changed += 1;

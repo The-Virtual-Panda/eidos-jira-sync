@@ -44,6 +44,7 @@ The plugin's settings page holds everything about how it works in this root, top
 | Pulling         | Download attachments                  | `pull_attachments`   | Download each issue's attachments through the Assets plugin instead of linking to Jira.         |
 | Pulling         | Attachments folder                    | `attachments_folder` | The asset folder downloads go to; empty, the Assets plugin's first folder.                      |
 | Pulling         | Add people as users                   | `add_people`         | Add each person a pull finds that the root doesn't have to its users.                           |
+| Pulling         | Show the Jira key in a property       | `key_property`       | Write each linked task's Jira key to a Text property, so the Backlog's table and bulk edit show it. |
 | New boards      | A board of its own for each new board | `own_board`          | Give every board you connect from now on a Backlog board of its own, named after it.            |
 | New boards      | Keep a board's tasks in a folder      | `board_folders`      | Keep the tasks of a board made for a connection in a folder of their own.                       |
 | On this machine | Fetch automatically                   | `auto_fetch`         | Fetch every 5, 15, 30, or 60 minutes while the app has the root open. Nothing pulls on its own. |
@@ -109,6 +110,12 @@ The comments came from Jira, each signed by the person who wrote it, with their 
 ### Make an issue from a task
 
 **Create in Jira…** on a task's panel shows the plan first: the board, the issue type, and anything Jira requires, each chosen in the page. Choose **Create** and the task becomes the issue's. It makes nothing while something stops it, and a create cut short is found again by a mark on the issue, never made twice.
+
+### See the Jira key in the Backlog
+
+A task's link to its issue is the plugin's own, so the Backlog's table, its cards, and a bulk edit don't show it on their own. Turn on **Show the Jira key in a property** under **Pulling** and each linked task holds its key (`RIDE-42`) in a Text property, `jira_key` unless you name another. Turning it on makes the property if the root has none, adds it to each connected board that uses only some of the root's properties, and fills it in on every linked task at once. From then on every pull, create, and sync writes it. The property is the key's alone: pick one the field mapping doesn't carry. Turn it off and the tasks keep the keys they hold.
+
+From a terminal: `eidos jira-sync key-property jira_key`, and `--off` to stop.
 
 ### Don't sync
 

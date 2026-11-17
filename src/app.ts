@@ -86,7 +86,8 @@ function state(host: AppHost, api: JiraApi): Record<string, unknown> {
       sync: waiting.find((entry) => entry.connection === connection.name) ?? null,
       paused: paused.find((entry) => entry.connection === connection.name) ?? null,
     })),
-    settings: Object.fromEntries(SETTINGS.map((name) => [name, host.settings().get(name)])),
+    // key_property is read here and set through its own route, which declares the property and fills it in
+    settings: Object.fromEntries([...SETTINGS, 'key_property'].map((name) => [name, host.settings().get(name)])),
     needs: api.needs(),
     // the folders the Assets plugin manages, where downloaded attachments may go; null with the Assets plugin off
     asset_folders: api.assetFolders(),
@@ -212,6 +213,14 @@ const entry: AppEntry<JiraApi> = {
           await host.settings().set(name, value);
         }
         return { state: state(host, api) };
+      }),
+    );
+
+    host.route('POST', 'key-property', (request) =>
+      answer(async () => {
+        const name = text(request.body['name']);
+        const done = await api.keyProperty(name === '' ? null : name);
+        return { done, state: state(host, api) };
       }),
     );
 

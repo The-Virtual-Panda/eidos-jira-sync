@@ -111,6 +111,7 @@ interface State {
     auto_fetch: string;
     auto_sync_on_save: boolean;
     auto_sync_on_push: boolean;
+    key_property: string;
   };
   // the tasks an auto sync stopped on, waiting for the person (Jira Sync REQ20)
   needs: Array<{ task: string; key: string; reason: string; at: string }>;
@@ -2559,6 +2560,22 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
   // where downloads land: the folder chosen while the Assets plugin manages it, else its first (Jira Pull REQ14)
   const folders = props.state.asset_folders;
   const chosenFolder = folders?.find((folder) => folder === settings.attachments_folder) ?? folders?.[0] ?? '';
+  // the property each linked task holds its Jira key in; turning it on declares the property and fills it in
+  const keyProperty = settings.key_property ?? '';
+  const [keyName, setKeyName] = useState(keyProperty || 'jira_key');
+  useEffect(() => {
+    if (keyProperty) setKeyName(keyProperty);
+  }, [keyProperty]);
+  const writeKey = (name: string | null): void =>
+    void props.act(
+      'setting:key_property',
+      () => host.post<{ done: { property: string | null; written: number; refused: string[] }; state: State }>('key-property', { name: name ?? '' }),
+      (answer) => {
+        props.take(answer);
+        if (answer.done.property) host.toast(t('keyPropertyWritten', { property: answer.done.property, n: answer.done.written }), 'success');
+        for (const refusal of answer.done.refused) host.toast(refusal, 'error');
+      },
+    );
   return (
     <>
       <Stack gap="xs">
@@ -2601,6 +2618,32 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
             hint={t('addPeopleHint')}
             control={<Switch checked={settings.add_people} aria-label={t('addPeople')} onChange={(event: { currentTarget: HTMLInputElement }) => write('add_people', event.currentTarget.checked)} />}
           />
+          <SettingRow
+            label={t('keyProperty')}
+            hint={keyProperty ? t('keyPropertyOnHint', { property: keyProperty }) : t('keyPropertyHint')}
+            control={
+              <Switch
+                checked={keyProperty !== ''}
+                aria-label={t('keyProperty')}
+                data-testid="jira-key-property"
+                onChange={(event: { currentTarget: HTMLInputElement }) => writeKey(event.currentTarget.checked ? keyName.trim() || 'jira_key' : null)}
+              />
+            }
+          />
+          {keyProperty !== '' && (
+            <SettingRow
+              label={t('keyPropertyName')}
+              hint={t('keyPropertyNameHint')}
+              control={
+                <Row>
+                  <Input aria-label={t('keyPropertyName')} value={keyName} onChange={(event: { target: HTMLInputElement }) => setKeyName(event.target.value)} data-testid="jira-key-property-name" />
+                  <Button size="sm" disabled={keyName.trim() === '' || keyName.trim() === keyProperty} onClick={() => writeKey(keyName.trim())}>
+                    {t('keyPropertyUse')}
+                  </Button>
+                </Row>
+              }
+            />
+          )}
         </Card>
       </Stack>
       {props.state.backlog_boards !== null && (
@@ -2700,7 +2743,7 @@ export const page: PagePlugin = {
   ],
   pages: [{ path: 'mapping', render: (route: { segments: string[] }) => <MappingPage key={route.segments[0] ?? ''} name={decodeURIComponent(route.segments[0] ?? '')} /> }],
   settings: () => <JiraSettings />,
-  settingsDrawn: ['connections', 'accounts', 'pull_attachments', 'attachments_folder', 'add_people', 'own_board', 'board_folders', 'auto_fetch', 'auto_sync_on_save', 'auto_sync_on_push'],
+  settingsDrawn: ['connections', 'accounts', 'pull_attachments', 'attachments_folder', 'add_people', 'key_property', 'own_board', 'board_folders', 'auto_fetch', 'auto_sync_on_save', 'auto_sync_on_push'],
   // wherever the person is, an auto sync that stops on something says so once (Jira Sync REQ20)
   useListen: () => {
     const host = usePluginHost();

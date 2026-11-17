@@ -432,3 +432,38 @@ test('Jira Sync REQ18: a section changed in Jira and here is merged with --take 
   const refused = await eidos(['jira-sync', 'sync', 'T-ACME-3', '--take', 'title=both', '--dry-run']);
   assert.match(refused.stderr, /--take title=both merges a section/);
 });
+
+test('Jira key property: turned on, every linked task holds its key, and each pull, create, and sync writes it; off, the tasks keep theirs', async () => {
+  const before = await ok(['jira-sync', 'status', 'acme']);
+  const on = await ok(['jira-sync', 'key-property', 'jira_key']);
+  assert.match(on, /The Jira key is written to jira_key: [1-9]\d* tasks? given theirs now/);
+  assert.match(readFileSync(taskFile('T-ACME-1'), 'utf8'), /\njira_key: ACME-1\n/);
+  // the property is the plugin's to write, so the backfill lists no task as edited here
+  assert.equal(await ok(['jira-sync', 'status', 'acme']), before);
+  assert.match(await ok(['jira-sync', 'key-property']), /written to jira_key/);
+  // a pull writes the key back to a task whose property was cleared
+  await ok(['backlog', 'set', 'T-ACME-2', '--property', 'jira_key=']);
+  assert.doesNotMatch(readFileSync(taskFile('T-ACME-2'), 'utf8'), /jira_key: ACME-2/);
+  touch(fake.state, 'ACME-2', { summary: 'Renamed for the key property' }, jiraNow());
+  await ok(['jira-sync', 'pull', 'acme']);
+  assert.match(readFileSync(taskFile('T-ACME-2'), 'utf8'), /\njira_key: ACME-2\n/);
+  // a create writes the new issue's key
+  await ok(['backlog', 'add', 'Show the key in the table']);
+  const task = (JSON.parse(await ok(['backlog', '--json'])) as { tasks: Array<{ id: string; title: string }> }).tasks.find((held) => held.title === 'Show the key in the table')!;
+  const made = await ok(['jira-sync', 'create', task.id, '--connection', 'acme', '--type', 'Story', '--yes']);
+  const key = /→ (ACME-\d+)/.exec(made)![1]!;
+  assert.match(readFileSync(taskFile(task.id), 'utf8'), new RegExp(`\\njira_key: ${key}\\n`));
+  // a property the key cannot go in is refused, and the setting stays as it was
+  await ok(['backlog', 'configure:property', 'add', 'points', '--type', 'Number']);
+  const refused = await eidos(['jira-sync', 'key-property', 'points']);
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /points is a Number property; the Jira key goes in a Text one/);
+  assert.match(await ok(['jira-sync', 'key-property']), /written to jira_key/);
+  // off: the tasks keep their keys, and a create writes none
+  assert.match(await ok(['jira-sync', 'key-property', '--off']), /no longer written/);
+  assert.match(readFileSync(taskFile('T-ACME-1'), 'utf8'), /\njira_key: ACME-1\n/);
+  await ok(['backlog', 'add', 'Made with the key off']);
+  const later = (JSON.parse(await ok(['backlog', '--json'])) as { tasks: Array<{ id: string; title: string }> }).tasks.find((held) => held.title === 'Made with the key off')!;
+  await ok(['jira-sync', 'create', later.id, '--connection', 'acme', '--type', 'Story', '--yes']);
+  assert.doesNotMatch(readFileSync(taskFile(later.id), 'utf8'), /jira_key:/);
+});

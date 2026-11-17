@@ -8,6 +8,7 @@ import type { CliEntry, FoundProblem, Host } from 'eidosmd/plugin';
 import { jiraClient, JiraError, type Credentials } from './client.ts';
 import {
   connection as connectionNamed,
+  ConnectionError,
   connections,
   credentials,
   heldSignIns,
@@ -47,6 +48,7 @@ import { create as createIssue, parentsFirst, prepareCreate, type CreateOptions,
 import { heldOf, readState, run, skipOf, writeState, type Done, type Plan } from './pull.ts';
 import { readNeeds, setNeed, startAutoSync, type Need } from './autosync.ts';
 import { apply as applySync, editedHere, journalOf, prepare as prepareSync, sendComment, SyncRefused, taskFor, type SyncDone, type SyncOptions, type SyncPlan } from './sync.ts';
+import { keyedProperties, keyPropertyRefusal } from './keyed.ts';
 import { tokensFile } from './tokens.ts';
 import { lift, onSite, pause, pauseOf, pauses, refusalOf, type Pause } from './pause.ts';
 import { matchBoardChange, matchChange, type BoardMatch, type MatchList, type MatchMode } from './reshape.ts';
@@ -147,6 +149,18 @@ export interface JiraApi {
   taskAt(file: string): TaskLink | null;
   // marks a task Don't sync, or clears the mark: a marked task is the root's own, never pulled over nor sent
   skip(task: string, on: boolean): void;
+  // the Jira key written to a Text property (key_property): declared where the root has none, put on each connection's board
+  // that uses a subset of the root's properties, and every linked task given its key; null turns it off, and the tasks keep
+  // the keys they hold
+  keyProperty(name: string | null): Promise<KeyPropertyDone>;
+}
+
+export interface KeyPropertyDone {
+  property: string | null;
+  // the tasks given their key now
+  written: number;
+  // why a connection's tasks were left without it
+  refused: string[];
 }
 
 export interface TaskLink {
@@ -960,6 +974,53 @@ const entry: CliEntry = {
           skipped: skipOf(task),
         };
       },
+      keyProperty: async (given) => {
+        const backlog = backlogOf(host);
+        const name = given?.trim() ?? '';
+        if (name === '') {
+          await host.settings().set('key_property', '');
+          host.emit('changed', {});
+          return { property: null, written: 0, refused: [] };
+        }
+        if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error(`a property's name is letters, digits, _ and -; got '${name}'`);
+        const declared = backlog.settings().properties.find((property) => property.name.toLowerCase() === name.toLowerCase());
+        if (declared && declared.type.toLowerCase() !== 'text') throw new Error(`${declared.name} is a ${declared.type} property; the Jira key goes in a Text one`);
+        if (!declared) await backlog.addProperty({ name, type: 'Text', meaning: 'the Jira issue this task holds, written by Jira Sync' });
+        const property = declared?.name ?? name;
+        if (backlog.setBoard) {
+          for (const connection of connections(host)) {
+            const board = boardOf(backlog.settings(), connection);
+            if (board === null || board.properties === null || board.properties.includes(property)) continue;
+            await backlog.setBoard(board.name, { properties: [...board.properties, property] });
+          }
+        }
+        await host.settings().set('key_property', property);
+        const written: string[] = [];
+        const refused = new Set<string>();
+        for (const task of backlog.tasks()) {
+          const held = heldOf(task);
+          if (!held || skipOf(task)) continue;
+          let connection: Connection;
+          try {
+            connection = connectionOfTask(host, task);
+          } catch (cause) {
+            // a task no connection here reaches keeps what it holds, as a pull would leave it
+            if (cause instanceof SyncRefused || cause instanceof ConnectionError) continue;
+            throw cause;
+          }
+          const refusal = keyPropertyRefusal(backlog, connection, property);
+          if (refusal !== null) {
+            refused.add(refusal);
+            continue;
+          }
+          const keyed = keyedProperties(host, backlog, connection, task, held.key);
+          if (Object.keys(keyed).length === 0) continue;
+          backlog.set(task.id ?? task.name, { properties: keyed });
+          written.push(task.id ?? task.name);
+        }
+        host.emit('changed', written.length > 0 ? { tasks: written } : {});
+        return { property, written: written.length, refused: [...refused] };
+      },
       skip: (ref, on) => {
         const backlog = backlogOf(host);
         const task = taskFor(backlog, ref);
@@ -1567,6 +1628,28 @@ const entry: CliEntry = {
           action(async (ref: string, options: { off?: boolean }) => {
             api.skip(ref, !options.off);
             print(options.off ? `${ref} syncs with Jira again.` : `${ref} is marked Don't sync.`);
+          }),
+        );
+
+      command
+        .command('key-property')
+        .argument('[property]', 'the Text property a task holds its Jira key in, declared when the root has none')
+        .option('--off', 'stop writing the key; the tasks keep the keys they hold')
+        .description("write each linked task's Jira key to a property, so the Backlog's table and a bulk edit show it")
+        .action(
+          action(async (name: string | undefined, options: { off?: boolean }) => {
+            if (!options.off && !name) {
+              const held = host.settings().get<unknown>('key_property');
+              print(typeof held === 'string' && held.trim() !== '' ? `The Jira key is written to ${held}.` : 'The Jira key is written to no property; eidos jira-sync key-property <property> turns it on.');
+              return;
+            }
+            const done = await api.keyProperty(options.off ? null : (name ?? null));
+            if (done.property === null) {
+              print('The Jira key is no longer written to a property; the tasks keep the keys they hold.');
+              return;
+            }
+            print(`The Jira key is written to ${done.property}: ${done.written} task${done.written === 1 ? '' : 's'} given theirs now.`);
+            for (const refusal of done.refused) print(`  ✗ ${refusal}`);
           }),
         );
 
