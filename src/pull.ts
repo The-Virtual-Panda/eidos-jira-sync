@@ -109,8 +109,10 @@ export interface Plan {
   since: string | null;
   // the mapping changed since the last pull, so every issue is read again, whatever its last update (Jira Pull REQ3)
   remapped?: boolean;
-  add: Array<{ key: string; title: string; type: string }>;
-  change: Array<{ key: string; task: string; fields: string[] }>;
+  // `at` is when Jira last updated the issue
+  add: Array<{ key: string; title: string; type: string; at?: string }>;
+  // `jira` holds the fields Jira changed since the last pull or sync, apart from those that differ only by an edit here
+  change: Array<{ key: string; task: string; fields: string[]; jira?: string[]; at?: string }>;
   // tasks whose mapped fields were edited in the root since their last pull, and those fields (REQ5)
   local: Array<{ key: string; task: string; fields: string[] }>;
   // tasks whose fields the root owns that Jira changed, left as the root has them for a sync to settle
@@ -148,6 +150,10 @@ export interface Done {
 export interface PullOptions {
   full?: boolean;
   keepLocal?: boolean;
+  // only these issues, by key (Reviewing Jira Changes REQ5): each brought in as a whole pull would, and nothing else of the
+  // board written, its sprints and its issues gone from the scope included; the last pull's time stays, so the next fetch
+  // still finds every other change
+  only?: ReadonlySet<string>;
   // the moment the run reads Jira, for a test's clock
   now?: Date;
 }
@@ -489,7 +495,9 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const since = options.full || remapped || !state.last_pull ? null : new Date(new Date(state.last_pull).getTime() - OVERLAP_MINUTES * 60_000);
   const changedJql = since ? `(${scope}) AND updated >= "${jqlMoment(since, context.timeZone)}"` : scope;
   const wanted = [...new Set([...BASE_FIELDS, ...pairs.map((pair) => pair.jira)])];
-  const issues = await search(client, `${changedJql} ORDER BY key ASC`, wanted, 100);
+  const searched = await search(client, `${changedJql} ORDER BY key ASC`, wanted, 100);
+  const only = options.only;
+  const issues = only ? searched.filter((issue) => only.has(issue.key)) : searched;
   const inScope = new Set((await search(client, scope, ['id'], 5000)).map((issue) => issue.id));
   const site = siteKey(connection.site);
   const base = siteBase(connection.site);
@@ -637,8 +645,12 @@ export async function run(context: Context, write: boolean, options: PullOptions
     const owned = task ? issuePairs.filter((pair) => pair.owner === 'eidos' && changes.includes(pair.eidos)).map((pair) => pair.eidos) : [];
     intents.push({ issue: seen, task, type, fields, digest, remote, changes, local: local.filter((eidos) => changes.includes(eidos)), owned, parentIssue, parentKey, comments, absent });
     if (owned.length > 0) plan.owned.push({ key: issue.key, task: task!.id ?? task!.name, fields: owned });
-    if (!task) plan.add.push({ key: issue.key, title: fields.title ?? issue.key, type });
-    else if (changes.length > 0 || was?.key !== issue.key || was?.gone !== undefined) plan.change.push({ key: issue.key, task: task.id ?? task.name, fields: changes });
+    const at = moment(issue.fields.updated);
+    // what Jira itself moved: a field whose value there is not what the last pull or sync recorded of it
+    const moved = changes.filter((eidos) => eidos === 'parent' || was?.digest?.[eidos] === undefined || was.digest[eidos] !== digest[eidos]);
+    if (!task) plan.add.push({ key: issue.key, title: fields.title ?? issue.key, type, ...(at ? { at } : {}) });
+    else if (changes.length > 0 || was?.key !== issue.key || was?.gone !== undefined)
+      plan.change.push({ key: issue.key, task: task.id ?? task.name, fields: changes, jira: moved, ...(at ? { at } : {}) });
     else plan.unchanged += 1;
     const localHere = local.filter((eidos) => changes.includes(eidos));
     if (task && localHere.length > 0) plan.local.push({ key: issue.key, task: task.id ?? task.name, fields: localHere });
@@ -655,7 +667,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   // REQ11: an issue gone from the scope leaves its task where it is, marked
   for (const [id, task] of held) {
     const was = heldOf(task)!;
-    if (inScope.has(id) || skipOf(task)) continue;
+    if (only || inScope.has(id) || skipOf(task)) continue;
     if (projectOf(was.key) !== connection.project && !connection.jql && connection.board === undefined) continue;
     if (was.gone === undefined) plan.gone.push({ key: was.key, task: task.id ?? task.name });
   }
@@ -695,7 +707,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   const keyedId = (key: string): string => `T-${key}`;
   // a sprint becomes a milestone of its name, dated when it ends, before any task names it
   for (const name of plan.milestones) await backlog.addMilestone({ name, date: sprints.get(name) ?? null });
-  if (carrying) await backlog.holdSprints!(holdFor(connection), heldSprints(boardSprints, names), onBacklogBoard);
+  if (carrying && !only) await backlog.holdSprints!(holdFor(connection), heldSprints(boardSprints, names), onBacklogBoard);
   for (const intent of intents) {
     const { issue } = intent;
     const index = byIssue();
@@ -830,7 +842,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   }
 
   // the reports the sprints still want, now every task is in place to be named (Jira Pull REQ19)
-  if (carrying) {
+  if (carrying && !only) {
     const heldNow = backlog.sprints?.(onBacklogBoard) ?? [];
     const wanting = boardSprints.filter((sprint) => {
       const here = heldNow.find((held) => held.source === String(sprint.id));
@@ -855,7 +867,7 @@ export async function run(context: Context, write: boolean, options: PullOptions
   }
 
   done.people = people.added.size;
-  writeState(host.workspace, connection.name, { ...state, last_pull: now.toISOString(), last_fetch: { at: now.toISOString(), count: 0 }, sprints_carried: carrying, mapping: mapped });
+  if (!only) writeState(host.workspace, connection.name, { ...state, last_pull: now.toISOString(), last_fetch: { at: now.toISOString(), count: 0 }, sprints_carried: carrying, mapping: mapped });
   lift(host, [connection.name]);
   return { plan, done };
 }

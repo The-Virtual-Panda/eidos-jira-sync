@@ -1092,4 +1092,98 @@ export function editedHere(context: Pick<Context, 'backlog' | 'connection'>): Ar
   return out;
 }
 
+// What differs between one board and the project, a row per task or new issue (Reviewing Jira Changes REQ3): a task
+// edited here since its last sync goes To Jira; one the last fetch found Jira changed comes From Jira; one changed on
+// both sides goes Both ways, or is a Conflict where both changed the same field; one an auto sync or a create stopped on
+// Needs you; an issue new in Jira is New. Read from the project and the last fetch alone, never from Jira.
+export type ChangeWay = 'to-jira' | 'from-jira' | 'both' | 'conflict' | 'needs' | 'new';
+export interface ChangeRow {
+  // the task's id; null for an issue new in Jira
+  task: string | null;
+  key: string;
+  title: string;
+  way: ChangeWay;
+  fields: string[];
+  // when it last changed: here for what goes to Jira, in Jira for what comes from it
+  at: string | null;
+  // what stops it, for a row that needs the person
+  reason?: string;
+}
+type FetchedChanges = { add: ReadonlyArray<{ key: string; title: string; at?: string }>; change: ReadonlyArray<{ key: string; task: string; fields: string[]; jira?: string[]; at?: string }> };
+
+const later = (a: string | null, b: string | null): string | null => {
+  if (a === null) return b;
+  if (b === null) return a;
+  return a > b ? a : b;
+};
+
+export function changesOf(
+  backlog: Pick<Context, 'backlog'>['backlog'],
+  connection: Connection,
+  fetched: FetchedChanges | undefined,
+  needs: ReadonlyArray<{ task: string; key: string; reason: string }>,
+): ChangeRow[] {
+  const site = siteKey(connection.site);
+  const tasks = backlog.tasks();
+  const byId = new Map(tasks.map((task) => [task.id ?? task.name, task]));
+  const local = new Map(editedHere({ backlog, connection }).map((edited) => [edited.task, edited]));
+  const remote = new Map((fetched?.change ?? []).map((changed) => [changed.task, changed]));
+  const rows: ChangeRow[] = [];
+  for (const id of new Set([...local.keys(), ...remote.keys()])) {
+    const task = byId.get(id);
+    if (!task) continue;
+    const here = local.get(id)?.sides ?? [];
+    const changed = remote.get(id);
+    // a field that differs only by an edit here is the edit's, not Jira's
+    const there = changed?.jira ?? (changed?.fields ?? []).filter((field) => !here.includes(field));
+    if (here.length === 0 && there.length === 0) continue;
+    let way: ChangeWay = 'to-jira';
+    if (here.length > 0 && there.length > 0) way = here.some((field) => there.includes(field)) ? 'conflict' : 'both';
+    else if (there.length > 0) way = 'from-jira';
+    const key = local.get(id)?.key ?? changed?.key ?? '';
+    const at = later(here.length > 0 ? task.updated : null, there.length > 0 ? (changed?.at ?? null) : null);
+    rows.push({ task: id, key, title: task.title, way, fields: [...new Set([...here, ...there])], at });
+  }
+  const onSite = (id: string): boolean => {
+    const held = byId.get(id) ? heldOf(byId.get(id)!) : null;
+    return held !== null && siteKey(held.site) === site;
+  };
+  const stopped = (id: string, key: string, reason: string): void => {
+    const task = byId.get(id);
+    const row = rows.find((held) => held.task === id);
+    if (row) {
+      row.way = 'needs';
+      row.reason = reason;
+    } else rows.push({ task: id, key, title: task?.title ?? key, way: 'needs', fields: [], at: task?.updated ?? null, reason });
+  };
+  for (const need of needs) if (onSite(need.task)) stopped(need.task, need.key, need.reason);
+  for (const task of tasks) {
+    const raw = task.properties['jira-sync'] as { pending?: unknown; connection?: unknown } | null | undefined;
+    if (typeof raw?.pending === 'string' && raw.connection === connection.name) stopped(task.id ?? task.name, '', 'a create was cut short; eidos jira-sync create finds its issue');
+  }
+  for (const added of fetched?.add ?? []) rows.push({ task: null, key: added.key, title: added.title, way: 'new', fields: [], at: added.at ?? null });
+  return rows;
+}
+
+// Where each linked task stands with Jira, by its id (the Jira Sync Status column): Synced once linked and level, else
+// the way its row on Changes to sync goes. An issue new in Jira is no task yet, so it has no cell.
+export type TaskSyncState = 'synced' | Exclude<ChangeWay, 'new'>;
+export function taskStates(
+  backlog: Pick<Context, 'backlog'>['backlog'],
+  connections: readonly Connection[],
+  fetched: (connection: Connection) => FetchedChanges | undefined,
+  needs: ReadonlyArray<{ task: string; key: string; reason: string }>,
+): Record<string, TaskSyncState> {
+  const out: Record<string, TaskSyncState> = {};
+  for (const connection of connections) {
+    const site = siteKey(connection.site);
+    for (const task of backlog.tasks()) {
+      const held = heldOf(task);
+      if (held && siteKey(held.site) === site && !held.gone && !skipOf(task)) out[task.id ?? task.name] = 'synced';
+    }
+    for (const row of changesOf(backlog, connection, fetched(connection), needs)) if (row.task !== null && row.way !== 'new') out[row.task] = row.way;
+  }
+  return out;
+}
+
 export { categoryOf };
