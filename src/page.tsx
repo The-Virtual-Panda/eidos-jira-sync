@@ -570,7 +570,10 @@ function JiraView(): JSX.Element {
       </NavHead>
       {body}
       <NavFoot>
-        <NavFootLink onClick={() => host.navigate('/plugins/jira-sync')}>{t('openSettings')}</NavFootLink>
+        <NavFootLink onClick={() => host.navigate('/plugins/jira-sync')}>
+          <GearIcon />
+          <span>{t('openSettings')}</span>
+        </NavFootLink>
       </NavFoot>
     </Nav>
   );
