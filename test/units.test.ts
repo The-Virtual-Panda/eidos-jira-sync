@@ -579,7 +579,7 @@ test('Reviewing Jira Changes REQ3, Workbench Surfaces REQ8: each difference betw
   const { changesOf, taskStates } = await import('../src/sync.ts');
   const { normalise, short } = await import('../src/pull.ts');
   const held = (key: string, title: string, extra: Record<string, unknown> = {}) => ({
-    'jira-sync': { id: key, site: 'acme.atlassian.net', key, digest: { title: short(normalise(title)) }, ...extra },
+    'jira-sync': { id: key, site: 'acme.atlassian.net', key, digest: { title: short(normalise(title)), status: short(normalise(null)) }, remote: { title: 'seen', status: 'seen' }, ...extra },
   });
   const task = (id: string, title: string, properties: Record<string, unknown>) => ({ id, name: id.toLowerCase(), title, properties, updated: '2026-11-20T10:00:00Z' });
   const tasks = [
@@ -593,15 +593,20 @@ test('Reviewing Jira Changes REQ3, Workbench Surfaces REQ8: each difference betw
     task('T-8', 'Create cut short', { 'jira-sync': { pending: 'abc', connection: 'acme' } }),
     task('T-9', 'Another site', { 'jira-sync': { id: 'X-9', site: 'other.atlassian.net', key: 'X-9', digest: {} } }),
     task('T-10', 'Edited here, moved there', held('ACME-10', 'Before the edit')),
+    // what the sync's review would put to the person: a field Jira changed with no base kept here, and an edit here
+    // whose Jira side was never recorded
+    task('T-12', 'No base for status', held('ACME-12', 'No base for status', { digest: { title: short(normalise('No base for status')) } })),
+    task('T-13', 'Edited, Jira side unrecorded', held('ACME-13', 'Before the edit', { remote: {} })),
   ];
   const backlog = { tasks: () => tasks, settings: () => ({ boards: [], statuses: [], columns: [], types: [], properties: [] }) };
-  const connection = { name: 'acme', site: 'acme.atlassian.net', mapping: { fields: [{ jira: 'summary', eidos: 'title' }] } } as unknown as Connection;
+  const connection = { name: 'acme', site: 'acme.atlassian.net', mapping: { fields: [{ jira: 'summary', eidos: 'title' }, { jira: 'status', eidos: 'status' }] } } as unknown as Connection;
   const fetched = {
     add: [{ key: 'ACME-11', title: 'New in Jira', at: '2026-11-21T09:00:00Z' }],
     change: [
       { key: 'ACME-3', task: 'T-3', fields: ['title'], jira: ['title'], at: '2026-11-22T09:00:00Z' },
       { key: 'ACME-4', task: 'T-4', fields: ['title'], jira: ['title'], at: '2026-11-22T09:00:00Z' },
       { key: 'ACME-10', task: 'T-10', fields: ['title', 'status'], jira: ['status'], at: '2026-11-22T09:00:00Z' },
+      { key: 'ACME-12', task: 'T-12', fields: ['status'], jira: ['status'], at: '2026-11-22T09:00:00Z' },
     ],
   };
   const needs = [{ task: 'T-5', key: 'ACME-5', reason: 'a status to choose' }];
@@ -612,7 +617,9 @@ test('Reviewing Jira Changes REQ3, Workbench Surfaces REQ8: each difference betw
       ['T-2', 'ACME-2', 'to-jira', ['title']],
       ['T-4', 'ACME-4', 'conflict', ['title']],
       ['T-10', 'ACME-10', 'both', ['title', 'status']],
+      ['T-13', 'ACME-13', 'conflict', ['title']],
       ['T-3', 'ACME-3', 'from-jira', ['title']],
+      ['T-12', 'ACME-12', 'conflict', ['status']],
       ['T-5', 'ACME-5', 'needs', []],
       ['T-8', '', 'needs', []],
       [null, 'ACME-11', 'new', []],
@@ -628,5 +635,7 @@ test('Reviewing Jira Changes REQ3, Workbench Surfaces REQ8: each difference betw
     'T-5': 'needs',
     'T-8': 'needs',
     'T-10': 'both',
+    'T-12': 'conflict',
+    'T-13': 'conflict',
   });
 });

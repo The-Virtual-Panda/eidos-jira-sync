@@ -710,16 +710,16 @@ function ChangesPage(props: { name: string }): JSX.Element {
   const all = rows ?? [];
   // every row that can sync starts picked; the person takes out what they want left
   const chosen = picked ?? new Set(all.filter(pickable).map(rowKey));
-  const fields = [...new Set(all.flatMap((row) => row.fields))].sort((a, b) => a.localeCompare(b));
+  const fields = [...new Set(all.flatMap((row) => row.fields))].sort((a, b) => sideName(a).localeCompare(sideName(b)));
   const counted = (wanted: ChangeWay): number => all.filter((row) => row.way === wanted).length;
   const matched = all.filter(
-    (row) => (way === 'all' || row.way === way) && (field === '' || row.fields.includes(field)) && matchesSearch(search, [row.key, row.title, t(WAY_LOOK[row.way].label), row.fields]),
+    (row) => (way === 'all' || row.way === way) && (field === '' || row.fields.includes(field)) && matchesSearch(search, [row.key, row.title, t(WAY_LOOK[row.way].label), row.fields.map(sideName)]),
   );
   const valueOf = (row: ChangeRow, column: string): string | number => {
     if (column === 'key') return row.key;
     if (column === 'task') return row.title;
     if (column === 'way') return WAYS.indexOf(row.way);
-    if (column === 'fields') return row.fields.join(', ');
+    if (column === 'fields') return row.fields.map(sideName).join(', ');
     return row.at ?? '';
   };
   const sorted = sort
@@ -731,7 +731,8 @@ function ChangesPage(props: { name: string }): JSX.Element {
       })
     : [...matched].sort((a, b) => WAYS.indexOf(a.way) - WAYS.indexOf(b.way));
   const shown = sorted.slice(page * pageSize, (page + 1) * pageSize);
-  const syncable = all.filter((row) => pickable(row) && chosen.has(rowKey(row)));
+  // only the picked rows the filters show: a row out of sight is never synced unseen
+  const syncable = matched.filter((row) => pickable(row) && chosen.has(rowKey(row)));
   const toggle = (row: ChangeRow): void => {
     const next = new Set(chosen);
     if (!next.delete(rowKey(row))) next.add(rowKey(row));
@@ -810,14 +811,14 @@ function ChangesPage(props: { name: string }): JSX.Element {
               <option value="">{t('filterField')}</option>
               {fields.map((held) => (
                 <option key={held} value={held}>
-                  {held}
+                  {sideName(held)}
                 </option>
               ))}
             </Select>
           )}
         </FilterBar>
         <TableWrap>
-          <Table>
+          <Table rowsOpen>
             <thead>
               <Tr>
                 <Th select>
@@ -845,8 +846,8 @@ function ChangesPage(props: { name: string }): JSX.Element {
               {rows === null && <SkeletonRows columns={columns} />}
               {rows !== null && shown.length === 0 && <TableEmpty colSpan={columns}>{all.length === 0 ? t('nothingToSync') : t('noChangesMatch')}</TableEmpty>}
               {shown.map((row) => (
-                <Tr key={rowKey(row)} data-change={rowKey(row)}>
-                  <Td cell="select">
+                <Tr key={rowKey(row)} data-change={rowKey(row)} onClick={() => row.task !== null && setReviewing(row.task)}>
+                  <Td cell="select" onClick={(event: { stopPropagation: () => void }) => event.stopPropagation()}>
                     <Checkbox
                       checked={pickable(row) && chosen.has(rowKey(row))}
                       disabled={!pickable(row)}
@@ -865,15 +866,15 @@ function ChangesPage(props: { name: string }): JSX.Element {
                       {t(WAY_LOOK[row.way].label)}
                     </Badge>
                   </Td>
-                  <Td>{row.fields.join(', ')}</Td>
+                  <Td className="whitespace-normal">{row.fields.map(sideName).join(', ')}</Td>
                   <Td title={row.at ? new Date(row.at).toLocaleString() : undefined}>
                     <Text size="sm" tone="faint">
                       {row.at ? ago(row.at) : ''}
                     </Text>
                   </Td>
-                  <Td>
+                  <Td cell="flags">
                     {row.task !== null && (
-                      <Button size="sm" onClick={() => setReviewing(row.task)}>
+                      <Button size="sm" onClick={(event: { stopPropagation: () => void }) => (event.stopPropagation(), setReviewing(row.task))}>
                         {t(pickable(row) ? 'review' : 'settle')}
                       </Button>
                     )}

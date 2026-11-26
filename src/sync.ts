@@ -1128,6 +1128,11 @@ export function changesOf(
   const byId = new Map(tasks.map((task) => [task.id ?? task.name, task]));
   const local = new Map(editedHere({ backlog, connection }).map((edited) => [edited.task, edited]));
   const remote = new Map((fetched?.change ?? []).map((changed) => [changed.task, changed]));
+  const pairs = fieldsOf(connection, settingsFor(backlog, connection));
+  const ownerOf = (side: string): 'both' | 'pull' | 'push' | null => {
+    const pair = pairs.find((held) => held.eidos === side);
+    return pair ? syncOf(pair) : null;
+  };
   const rows: ChangeRow[] = [];
   for (const id of new Set([...local.keys(), ...remote.keys()])) {
     const task = byId.get(id);
@@ -1137,8 +1142,15 @@ export function changesOf(
     // a field that differs only by an edit here is the edit's, not Jira's
     const there = changed?.jira ?? (changed?.fields ?? []).filter((field) => !here.includes(field));
     if (here.length === 0 && there.length === 0) continue;
+    // the sync's review puts these to the person as prepare does, so the row is a Conflict too: a field Jira changed that
+    // the task kept no base for or that the root owns, and a field changed here that Jira owns or whose Jira side was not recorded
+    const held = heldOf(task);
+    const settledInReview =
+      there.some((side) => held?.digest?.[side] === undefined || ownerOf(side) === 'push') ||
+      here.some((side) => ownerOf(side) === 'pull' || (!side.startsWith('section:') && held?.remote?.[side] === undefined));
     let way: ChangeWay = 'to-jira';
-    if (here.length > 0 && there.length > 0) way = here.some((field) => there.includes(field)) ? 'conflict' : 'both';
+    if (settledInReview) way = 'conflict';
+    else if (here.length > 0 && there.length > 0) way = here.some((field) => there.includes(field)) ? 'conflict' : 'both';
     else if (there.length > 0) way = 'from-jira';
     const key = local.get(id)?.key ?? changed?.key ?? '';
     const at = later(here.length > 0 ? task.updated : null, there.length > 0 ? (changed?.at ?? null) : null);
