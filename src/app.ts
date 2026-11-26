@@ -72,6 +72,11 @@ function syncOptions(value: unknown): SyncOptions {
   };
 }
 
+const changeCount = (rows: ReturnType<JiraApi['changes']>): { count: number; waiting: number } => ({
+  count: rows.length,
+  waiting: rows.filter((row) => row.way === 'conflict' || row.way === 'needs').length,
+});
+
 function state(host: AppHost, api: JiraApi): Record<string, unknown> {
   const status = api.status();
   const waiting = api.syncStatus();
@@ -85,6 +90,8 @@ function state(host: AppHost, api: JiraApi): Record<string, unknown> {
       status: status.find((entry) => entry.connection === connection.name) ?? null,
       sync: waiting.find((entry) => entry.connection === connection.name) ?? null,
       paused: paused.find((entry) => entry.connection === connection.name) ?? null,
+      // what its Changes to sync page lists, and how many of those wait on the person (Reviewing Jira Changes REQ1)
+      changes: changeCount(api.changes(connection.name)),
     })),
     // key_property is read here and set through its own route, which declares the property and fills it in
     settings: Object.fromEntries([...SETTINGS, 'key_property'].map((name) => [name, host.settings().get(name)])),
@@ -235,6 +242,8 @@ const entry: AppEntry<JiraApi> = {
 
     // Jira Push from the page: the task the open file holds, then the plan of its create and the create itself
     host.route('GET', 'task', (request) => answer(() => ({ task: api.taskAt(request.query.get('file') ?? '') })));
+    host.route('GET', 'task-status', () => answer(() => api.taskStatus()));
+    host.route('GET', 'changes', (request) => answer(() => api.changes(request.query.get('name') ?? '')));
     host.route('POST', 'skip', (request) =>
       answer(async () => {
         api.skip(text(request.body['task']), request.body['on'] === true);
@@ -252,7 +261,15 @@ const entry: AppEntry<JiraApi> = {
     );
 
     host.route('POST', 'fetch', (request) => answer(() => api.fetch(text(request.body['name']) || undefined)));
-    host.route('POST', 'pull', (request) => answer(() => api.pull(text(request.body['name']) || undefined, { full: request.body['full'] === true, keepLocal: request.body['keep_local'] === true })));
+    host.route('POST', 'pull', (request) =>
+      answer(() =>
+        api.pull(text(request.body['name']) || undefined, {
+          full: request.body['full'] === true,
+          keepLocal: request.body['keep_local'] === true,
+          ...(Array.isArray(request.body['only']) ? { only: new Set(request.body['only'].map(text).filter(Boolean)) } : {}),
+        }),
+      ),
+    );
   },
 };
 

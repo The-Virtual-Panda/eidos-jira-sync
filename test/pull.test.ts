@@ -433,3 +433,23 @@ test('Jira REQ25: a connection gets a Backlog board of its own, the backlog it w
   assert.match(readFileSync(path.join(root, '.eidos', 'plugins', 'jira-sync', 'settings.yaml'), 'utf8'), /backlog_board: acme-board-2/);
   await ok(['jira-sync', 'disconnect', 'acme-again']);
 });
+
+test('Reviewing Jira Changes REQ5: a pull of only the picked issues brings those in and leaves the rest for the next pull', async () => {
+  const story = fake.state.issues.find((held) => held.key === 'ACME-2')!;
+  const fresh = (id: string, key: string, summary: string): void => {
+    const at = jiraNow();
+    fake.state.issues.push({ id, key, fields: { ...story.fields, summary, parent: undefined, issuelinks: [], attachment: [], customfield_10020: null, created: at, updated: at, comments: [] } });
+  };
+  fresh('10191', 'ACME-91', 'Picked to come in');
+  fresh('10192', 'ACME-92', 'Left for later');
+  assert.match(await ok(['jira-sync', 'pull', 'acme', '--only', 'acme-91']), /1 added/);
+  const tasks = JSON.parse(await ok(['backlog', '--json'])) as { tasks: Array<{ title: string }> };
+  assert.ok(tasks.tasks.some((task) => task.title === 'Picked to come in'));
+  assert.ok(!tasks.tasks.some((task) => task.title === 'Left for later'));
+  const [plan] = JSON.parse(await ok(['jira-sync', 'fetch', 'acme', '--json'])) as Array<{ add: Array<{ key: string }> }>;
+  assert.deepEqual(
+    plan!.add.map((added) => added.key),
+    ['ACME-92'],
+    'the issue left out is still there to bring in, since the last pull did not move on past it',
+  );
+});

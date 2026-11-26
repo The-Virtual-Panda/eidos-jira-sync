@@ -11,17 +11,24 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
+  FilterBar,
   Input,
   Modal,
   Nav,
+  NavCount,
+  NavFold,
   NavFoot,
   NavFootLink,
   NavHead,
+  NavIcon,
+  NavLink,
   Notice,
   Page,
   PageHead,
   PageText,
   PageTitle,
+  Pager,
   Row,
   SaveActions,
   SaveNotice,
@@ -31,15 +38,28 @@ import {
   SettingRow,
   SettingsHead,
   SkeletonBar,
+  SkeletonRows,
+  SortTh,
   Stack,
   Switch,
+  Table,
+  TableEmpty,
+  TableSearch,
+  TableWrap,
+  Td,
   Text,
   Textarea,
+  Th,
+  Tr,
+  matchesSearch,
+  useCrumbs,
   useDirty,
   useFileChanges,
   useOpen,
   usePluginEvent,
   usePluginHost,
+  useSort,
+  type ColumnCell,
   type Dirty,
   type PagePlugin,
   type PluginHost,
@@ -74,6 +94,8 @@ interface ConnectionRow {
   sync: { edited: Array<{ task: string; key: string; sides: string[] }>; pending: string[]; interrupted: Array<{ key: string; at: string }> } | null;
   // set while auto fetch and auto sync are held off it, after Jira refused it (Jira REQ23)
   paused: Pause | null;
+  // what its Changes to sync page lists, and how many of those wait on the person (Reviewing Jira Changes REQ1)
+  changes?: { count: number; waiting: number };
 }
 interface Pause {
   connection: string;
@@ -455,28 +477,9 @@ function JiraView(): JSX.Element {
   const { t } = host;
   const { state, reload } = useJiraState();
   const { busy, act } = useActions(host);
-  const [found, setFound] = useState<Record<string, number>>({});
-  const [reviewing, setReviewing] = useState<string | null>(null);
-  const fetchOne = (name: string): Promise<void> =>
-    act(
-      `fetch:${name}`,
-      () => host.post<Plan[]>('fetch', { name }),
-      (plans) => {
-        if (plans[0]) setFound((held) => ({ ...held, [name]: planCount(plans[0]!) }));
-      },
-    );
-  const pullOne = (name: string): Promise<void> =>
-    act(
-      `pull:${name}`,
-      () => host.post<Done[]>('pull', { name }),
-      (dones) => {
-        const done = dones[0];
-        if (!done) return;
-        setFound((held) => ({ ...held, [name]: 0 }));
-        host.toast(t('pulledTitle', { name }), 'success', t('pulled', { added: done.added, changed: done.changed, comments: done.comments.added + done.comments.changed + done.comments.removed }));
-        reload();
-      },
-    );
+  const [chosen, choose] = useOpenBoard();
+  const open = useOpen() as { kind: string; plugin?: string; path?: string };
+  const fetchOne = (name: string): Promise<void> => act(`fetch:${name}`, () => host.post<Plan[]>('fetch', { name }), reload);
 
   let body: JSX.Element;
   if (!state)
@@ -499,118 +502,401 @@ function JiraView(): JSX.Element {
         </Row>
       </Stack>
     );
-  else
+  else {
+    // one board open at a time, the person's last choice while it is still connected, else the first (Reviewing Jira Changes REQ1)
+    const openName = state.connections.some((connection) => connection.name === chosen) ? chosen : state.connections[0]!.name;
     body = (
-      <Stack gap="md" pad="sm">
-        {state.needs.length > 0 && (
-          <Card data-testid="jira-needs">
-            <Stack gap="xs">
-              <Row>
-                <Text weight="strong" grow>
-                  {t('needsYou')}
-                </Text>
-                <Badge tone="accent">{state.needs.length}</Badge>
-              </Row>
-              {state.needs.map((need) => (
-                <Stack key={need.task} gap="xs">
-                  <Row>
-                    <Text size="sm" grow>
-                      {need.key}
-                    </Text>
-                    <Button size="sm" variant="quiet" disabled={busy !== null} onClick={() => setReviewing(need.task)}>
-                      {t('review')}
-                    </Button>
-                  </Row>
-                  <Text size="xs" tone="faint" block>
-                    {need.reason}
-                  </Text>
-                </Stack>
-              ))}
-            </Stack>
-          </Card>
-        )}
+      <Stack gap="xs">
         {state.connections.map((connection) => {
-          const lastFetch = connection.status?.last_fetch;
-          const waiting = found[connection.name] ?? (lastFetch && !lastFetch.error ? lastFetch.count : null);
+          const name = connection.name;
+          const count = connection.changes?.count ?? 0;
+          const waiting = (connection.changes?.waiting ?? 0) > 0;
+          const lastFetch = connection.status?.last_fetch ?? null;
           let line = t('notFetched');
           if (lastFetch?.error) line = t('fetchFailed', { error: lastFetch.error });
-          else if (waiting === 0) line = t('upToDate');
-          else if (waiting !== null && waiting !== undefined) line = t('toPull', { n: waiting });
+          else if (lastFetch) line = t('fetchedWhen', { when: ago(lastFetch.at) });
+          const here = open.kind === 'page' && open.plugin === 'jira-sync' && open.path === changesPath(name);
           return (
-            <Card key={connection.name} data-testid={`jira-board-${connection.name}`}>
-              <Stack gap="xs">
+            <NavFold
+              key={name}
+              data-testid={`jira-board-${name}`}
+              open={name === openName}
+              title={boardName(connection)}
+              meta={connection.project}
+              count={count}
+              onToggle={() => choose(name)}
+              actions={
+                <Button size="icon" variant="quiet" aria-label={t('boardSettings', { name: boardName(connection) })} data-tip={t('boardSettings', { name: boardName(connection) })} onClick={() => host.navigate(mappingHref(host, name))}>
+                  <GearIcon />
+                </Button>
+              }
+            >
+              {connection.paused ? (
+                <PausedNotice connection={connection} pause={connection.paused} busy={busy} act={act} take={reload} />
+              ) : (
                 <Row>
-                  <Text weight="strong" grow>
-                    {boardName(connection)}
+                  <Text size="sm" tone={lastFetch?.error ? 'error' : 'faint'} grow>
+                    {line}
                   </Text>
-                  {waiting ? <Badge tone="accent">{waiting}</Badge> : null}
-                </Row>
-                <Text size="xs" tone="faint">
-                  {[connection.project, connection.site].join(' · ')}
-                </Text>
-                {connection.paused && <PausedNotice connection={connection} pause={connection.paused} busy={busy} act={act} take={reload} />}
-                <Text size="sm" tone={lastFetch?.error ? 'error' : 'muted'} block>
-                  {line}
-                </Text>
-                <Text size="xs" tone="faint" block>
-                  {connection.status?.last_pull ? t('lastPull', { date: new Date(connection.status.last_pull).toLocaleString() }) : t('neverPulled')}
-                </Text>
-                {(connection.sync?.edited.length ?? 0) > 0 && (
-                  <Stack gap="xs" data-testid={`jira-edited-${connection.name}`}>
-                    <Text size="xs" tone="muted" block>
-                      {t('editedHere', { n: connection.sync!.edited.length })}
-                    </Text>
-                    {connection.sync!.edited.map((edited) => (
-                      <Row key={edited.task}>
-                        <Text size="sm" grow>
-                          {edited.key}
-                        </Text>
-                        <Button size="sm" variant="quiet" disabled={busy !== null} onClick={() => setReviewing(edited.task)}>
-                          {t('review')}
-                        </Button>
-                      </Row>
-                    ))}
-                  </Stack>
-                )}
-                {(connection.sync?.interrupted ?? []).map((cut) => (
-                  <Text key={cut.key} size="xs" tone="error" block>
-                    {t('syncCutShort', { key: cut.key })}
-                  </Text>
-                ))}
-                <Row>
-                  <Button size="sm" disabled={busy !== null} onClick={() => void fetchOne(connection.name)}>
-                    {t(busy === `fetch:${connection.name}` ? 'fetching' : 'fetch')}
-                  </Button>
-                  <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => void pullOne(connection.name)}>
-                    {t(busy === `pull:${connection.name}` ? 'pulling' : 'pull')}
+                  <Button size="sm" disabled={busy !== null} data-testid={`jira-fetch-${name}`} onClick={() => void fetchOne(name)}>
+                    <RefreshIcon />
+                    {t(busy === `fetch:${name}` ? 'fetching' : 'fetch')}
                   </Button>
                 </Row>
-              </Stack>
-            </Card>
+              )}
+              <NavLink href={host.hrefs.page(changesPath(name))} active={here} data-testid={`jira-changes-${name}`}>
+                <NavIcon>
+                  <TableIcon />
+                </NavIcon>
+                <span>{t('changesToSync')}</span>
+                <NavCount tone={waiting ? 'warn' : 'default'}>{count}</NavCount>
+              </NavLink>
+            </NavFold>
           );
         })}
+        <NavLink href="/plugins/jira-sync">
+          <NavIcon>
+            <PlusIcon />
+          </NavIcon>
+          <span>{t('connectBoard')}</span>
+        </NavLink>
       </Stack>
     );
+  }
   return (
     <Nav data-testid="jira-view">
       <NavHead>
         <b>{t('manifestTitle')}</b>
       </NavHead>
       {body}
+      <NavFoot>
+        <NavFootLink onClick={() => host.navigate('/plugins/jira-sync')}>{t('openSettings')}</NavFootLink>
+      </NavFoot>
+    </Nav>
+  );
+}
+
+// The board the person last opened in the sidebar, kept in this browser alone: where the sidebar opens next time.
+const OPEN_BOARD = 'eidos:jira-sync:open-board';
+function useOpenBoard(): [string | null, (name: string) => void] {
+  const [chosen, setChosen] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(OPEN_BOARD);
+    } catch {
+      return null;
+    }
+  });
+  const choose = (name: string): void => {
+    setChosen(name);
+    try {
+      localStorage.setItem(OPEN_BOARD, name);
+    } catch {
+      // a browser that keeps nothing opens on the first board next time
+    }
+  };
+  return [chosen, choose];
+}
+
+const changesPath = (name: string): string => `changes/${encodeURIComponent(name)}`;
+
+// How long ago a moment was, in the page's language, to the minute.
+function ago(at: string): string {
+  const minutes = Math.round((Date.parse(at) - Date.now()) / 60_000);
+  const words = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  if (Math.abs(minutes) < 60) return words.format(minutes, 'minute');
+  if (Math.abs(minutes) < 60 * 24) return words.format(Math.round(minutes / 60), 'hour');
+  return words.format(Math.round(minutes / (60 * 24)), 'day');
+}
+
+function GearIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+function RefreshIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+      <path d="M16 16h5v5" />
+    </svg>
+  );
+}
+function TableIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3v18" />
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M3 15h18" />
+    </svg>
+  );
+}
+function PlusIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
+    </svg>
+  );
+}
+
+// ---- the Changes to sync page (Reviewing Jira Changes REQ3 to REQ5) ---------------------------------------
+
+type ChangeWay = 'to-jira' | 'from-jira' | 'both' | 'conflict' | 'needs' | 'new';
+interface ChangeRow {
+  task: string | null;
+  key: string;
+  title: string;
+  way: ChangeWay;
+  fields: string[];
+  at: string | null;
+  reason?: string;
+}
+// the ways in the order the filter offers them, and the words and tone each is drawn with, as the status column draws them
+const WAYS: readonly ChangeWay[] = ['conflict', 'needs', 'to-jira', 'from-jira', 'both', 'new'];
+const WAY_LOOK: Record<ChangeWay, { label: string; tone: 'warn' | 'info' | 'ok' | 'accent' }> = {
+  conflict: { label: 'statusConflict', tone: 'warn' },
+  needs: { label: 'statusNeeds', tone: 'warn' },
+  'to-jira': { label: 'statusToJira', tone: 'info' },
+  'from-jira': { label: 'statusFromJira', tone: 'ok' },
+  both: { label: 'statusBoth', tone: 'info' },
+  new: { label: 'statusNew', tone: 'accent' },
+};
+// a row is settled in its review, not picked, while the person has something to choose there
+const pickable = (row: ChangeRow): boolean => row.way !== 'conflict' && row.way !== 'needs';
+const rowKey = (row: ChangeRow): string => row.task ?? `new:${row.key}`;
+const PAGE_SIZES = 25;
+
+function ChangesPage(props: { name: string }): JSX.Element {
+  const host = usePluginHost();
+  const hostRef = useHostRef(host);
+  const { t } = host;
+  const { state, reload: reloadState } = useJiraState();
+  const { busy, act } = useActions(host);
+  const [rows, setRows] = useState<ChangeRow[] | null>(null);
+  const read = useCallback(() => {
+    hostRef.current.get<ChangeRow[]>(`changes?name=${encodeURIComponent(props.name)}`).then(setRows, (cause) => hostRef.current.toast(hostRef.current.t('loadFailed'), 'error', reason(cause)));
+  }, [hostRef, props.name]);
+  useEffect(read, [read]);
+  usePluginEvent('fetched', read);
+  usePluginEvent('changed', read);
+  const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useFileChanges(() => {
+    if (settle.current) clearTimeout(settle.current);
+    settle.current = setTimeout(read, 600);
+  });
+  useEffect(
+    () => () => {
+      if (settle.current) clearTimeout(settle.current);
+    },
+    [],
+  );
+  const [way, setWay] = useState<ChangeWay | 'all'>('all');
+  const [search, setSearch] = useState('');
+  const [field, setField] = useState('');
+  const [sort, toggleSort] = useSort();
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(PAGE_SIZES);
+  const [picked, setPicked] = useState<ReadonlySet<string> | null>(null);
+  const [reviewing, setReviewing] = useState<string | null>(null);
+  const connection = state?.connections.find((held) => held.name === props.name) ?? null;
+  useCrumbs(connection ? [{ label: t('manifestTitle') }, { label: boardName(connection) }] : null);
+
+  const all = rows ?? [];
+  // every row that can sync starts picked; the person takes out what they want left
+  const chosen = picked ?? new Set(all.filter(pickable).map(rowKey));
+  const fields = [...new Set(all.flatMap((row) => row.fields))].sort((a, b) => a.localeCompare(b));
+  const counted = (wanted: ChangeWay): number => all.filter((row) => row.way === wanted).length;
+  const matched = all.filter(
+    (row) => (way === 'all' || row.way === way) && (field === '' || row.fields.includes(field)) && matchesSearch(search, [row.key, row.title, t(WAY_LOOK[row.way].label), row.fields]),
+  );
+  const valueOf = (row: ChangeRow, column: string): string | number => {
+    if (column === 'key') return row.key;
+    if (column === 'task') return row.title;
+    if (column === 'way') return WAYS.indexOf(row.way);
+    if (column === 'fields') return row.fields.join(', ');
+    return row.at ?? '';
+  };
+  const sorted = sort
+    ? [...matched].sort((a, b) => {
+        const left = valueOf(a, sort.key);
+        const right = valueOf(b, sort.key);
+        const order = typeof left === 'number' && typeof right === 'number' ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true });
+        return order * sort.dir;
+      })
+    : [...matched].sort((a, b) => WAYS.indexOf(a.way) - WAYS.indexOf(b.way));
+  const shown = sorted.slice(page * pageSize, (page + 1) * pageSize);
+  const syncable = all.filter((row) => pickable(row) && chosen.has(rowKey(row)));
+  const toggle = (row: ChangeRow): void => {
+    const next = new Set(chosen);
+    if (!next.delete(rowKey(row))) next.add(rowKey(row));
+    setPicked(next);
+  };
+  const everyPickable = matched.filter(pickable);
+  const allPicked = everyPickable.length > 0 && everyPickable.every((row) => chosen.has(rowKey(row)));
+  const toggleAll = (): void => {
+    const next = new Set(chosen);
+    for (const row of everyPickable) {
+      if (allPicked) next.delete(rowKey(row));
+      else next.add(rowKey(row));
+    }
+    setPicked(next);
+  };
+  // each picked task synced one issue at a time, then the picked new issues brought in by one pull of just those (REQ5)
+  const syncPicked = (): Promise<void> =>
+    act(
+      'sync-picked',
+      async () => {
+        let synced = 0;
+        for (const row of syncable) {
+          if (row.task === null) continue;
+          await host.post('sync', { task: row.task });
+          synced += 1;
+        }
+        const added = syncable.filter((row) => row.task === null).map((row) => row.key);
+        if (added.length > 0) await host.post<Done[]>('pull', { name: props.name, only: added });
+        return synced + added.length;
+      },
+      (n) => {
+        host.toast(t('syncedPicked', { n }), 'success');
+        setPicked(null);
+        read();
+        reloadState();
+      },
+    );
+
+  const columns = 7;
+  return (
+    <Page data-testid="jira-changes">
+      <PageHead>
+        <Row>
+          <PageTitle>
+            {t('changesToSync')} <Text tone="faint">{all.length}</Text>
+          </PageTitle>
+          <Row justify="end" grow>
+            <Button variant="primary" disabled={busy !== null || syncable.length === 0} data-testid="jira-sync-picked" onClick={() => void syncPicked()}>
+              {t(busy === 'sync-picked' ? 'syncing' : 'syncPicked', { n: syncable.length })}
+            </Button>
+          </Row>
+        </Row>
+      </PageHead>
+      <Stack gap="sm">
+        <Seg role="radiogroup" aria-label={t('wayFilter')} data-testid="jira-way">
+          <SegItem type="button" selected={way === 'all'} aria-pressed={way === 'all'} onClick={() => (setWay('all'), setPage(0))}>
+            {t('wayAll')} <Text tone="faint">{all.length}</Text>
+          </SegItem>
+          {WAYS.filter((held) => counted(held) > 0 || way === held).map((held) => (
+            <SegItem key={held} type="button" selected={way === held} aria-pressed={way === held} onClick={() => (setWay(held), setPage(0))}>
+              {t(WAY_LOOK[held].label)} <Text tone="faint">{counted(held)}</Text>
+            </SegItem>
+          ))}
+        </Seg>
+        <FilterBar
+          search={<TableSearch value={search} onChange={(value) => (setSearch(value), setPage(0))} />}
+          refresh={() => void act(`fetch:${props.name}`, () => host.post<Plan[]>('fetch', { name: props.name }), () => (read(), reloadState()))}
+          gear={
+            <Button size="icon" variant="quiet" aria-label={t('boardSettings', { name: connection ? boardName(connection) : props.name })} onClick={() => host.navigate(mappingHref(host, props.name))}>
+              <GearIcon />
+            </Button>
+          }
+        >
+          {fields.length > 0 && (
+            <Select filter aria-label={t('filterField')} value={field} data-testid="jira-field" onChange={(event: { target: HTMLSelectElement }) => (setField(event.target.value), setPage(0))}>
+              <option value="">{t('filterField')}</option>
+              {fields.map((held) => (
+                <option key={held} value={held}>
+                  {held}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FilterBar>
+        <TableWrap>
+          <Table>
+            <thead>
+              <Tr>
+                <Th select>
+                  <Checkbox checked={allPicked} disabled={everyPickable.length === 0} aria-label={t('pickAll')} onChange={toggleAll} />
+                </Th>
+                <SortTh sort={sort} column="key" onSort={toggleSort}>
+                  {t('columnKey')}
+                </SortTh>
+                <SortTh sort={sort} column="task" onSort={toggleSort}>
+                  {t('columnTask')}
+                </SortTh>
+                <SortTh sort={sort} column="way" onSort={toggleSort}>
+                  {t('columnWay')}
+                </SortTh>
+                <SortTh sort={sort} column="fields" onSort={toggleSort}>
+                  {t('columnFields')}
+                </SortTh>
+                <SortTh sort={sort} column="at" onSort={toggleSort}>
+                  {t('columnWhen')}
+                </SortTh>
+                <Th />
+              </Tr>
+            </thead>
+            <tbody>
+              {rows === null && <SkeletonRows columns={columns} />}
+              {rows !== null && shown.length === 0 && <TableEmpty colSpan={columns}>{all.length === 0 ? t('nothingToSync') : t('noChangesMatch')}</TableEmpty>}
+              {shown.map((row) => (
+                <Tr key={rowKey(row)} data-change={rowKey(row)}>
+                  <Td cell="select">
+                    <Checkbox
+                      checked={pickable(row) && chosen.has(rowKey(row))}
+                      disabled={!pickable(row)}
+                      aria-label={t('pickRow', { key: row.key || row.title })}
+                      onChange={() => toggle(row)}
+                    />
+                  </Td>
+                  <Td>
+                    <Text size="sm" tone="muted">
+                      {row.key}
+                    </Text>
+                  </Td>
+                  <Td cell="title">{row.title}</Td>
+                  <Td>
+                    <Badge tone={WAY_LOOK[row.way].tone} title={row.reason}>
+                      {t(WAY_LOOK[row.way].label)}
+                    </Badge>
+                  </Td>
+                  <Td>{row.fields.join(', ')}</Td>
+                  <Td title={row.at ? new Date(row.at).toLocaleString() : undefined}>
+                    <Text size="sm" tone="faint">
+                      {row.at ? ago(row.at) : ''}
+                    </Text>
+                  </Td>
+                  <Td>
+                    {row.task !== null && (
+                      <Button size="sm" onClick={() => setReviewing(row.task)}>
+                        {t(pickable(row) ? 'review' : 'settle')}
+                      </Button>
+                    )}
+                  </Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+        </TableWrap>
+        <Pager total={matched.length} all={all.length} page={page} pageSize={pageSize} onPage={setPage} onPageSize={(size) => (setPageSize(size), setPage(0))} />
+      </Stack>
       {reviewing && (
         <SyncReview
           task={reviewing}
           onClose={() => setReviewing(null)}
           onSynced={() => {
             setReviewing(null);
-            reload();
+            read();
+            reloadState();
           }}
         />
       )}
-      <NavFoot>
-        <NavFootLink onClick={() => host.navigate('/plugins/jira-sync')}>{t('openSettings')}</NavFootLink>
-      </NavFoot>
-    </Nav>
+    </Page>
   );
 }
 
@@ -2726,6 +3012,49 @@ function Options(props: { state: State; act: Act; take: (answer: { state: State 
   );
 }
 
+// ---- the Jira Sync Status column (Workbench Surfaces REQ8) --------------------------------------
+
+// Where each linked task stands with Jira, on every table of tasks: read again as a fetch, a sync, or a change on disk
+// lands, so it follows the work without asking Jira. A task that is not linked has no cell.
+type TaskSyncState = 'synced' | 'to-jira' | 'from-jira' | 'both' | 'conflict' | 'needs';
+const STATUS_CELLS: Record<TaskSyncState, ColumnCell> = {
+  conflict: { value: 'conflict', label: 'statusConflict', tone: 'warn' },
+  needs: { value: 'needs', label: 'statusNeeds', tone: 'warn' },
+  'to-jira': { value: 'to-jira', label: 'statusToJira', tone: 'info' },
+  'from-jira': { value: 'from-jira', label: 'statusFromJira', tone: 'ok' },
+  both: { value: 'both', label: 'statusBoth', tone: 'info' },
+  synced: { value: 'synced', label: 'statusSynced', tone: 'default' },
+};
+function useStatusCells(): Readonly<Record<string, ColumnCell>> | null {
+  const host = usePluginHost();
+  const hostRef = useRef(host);
+  hostRef.current = host;
+  const [cells, setCells] = useState<Record<string, ColumnCell> | null>(null);
+  const read = useCallback(() => {
+    hostRef.current.get<Record<string, TaskSyncState>>('task-status').then(
+      (states) => setCells(Object.fromEntries(Object.entries(states).map(([task, state]) => [task, STATUS_CELLS[state]]))),
+      // a column that cannot be read stays as it was; the sidebar says what failed
+      () => undefined,
+    );
+  }, []);
+  useEffect(read, [read]);
+  usePluginEvent('fetched', read);
+  usePluginEvent('changed', read);
+  // a task edited here becomes To Jira once the edits settle, not on every keystroke
+  const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useFileChanges(() => {
+    if (settle.current) clearTimeout(settle.current);
+    settle.current = setTimeout(read, 600);
+  });
+  useEffect(
+    () => () => {
+      if (settle.current) clearTimeout(settle.current);
+    },
+    [],
+  );
+  return cells;
+}
+
 export const page: PagePlugin = {
   name: 'jira-sync',
   strings: JIRA_STRINGS,
@@ -2741,7 +3070,11 @@ export const page: PagePlugin = {
       when: (open: { kind: string; plugin?: string }) => open.kind === 'page' && open.plugin === 'backlog',
     },
   ],
-  pages: [{ path: 'mapping', render: (route: { segments: string[] }) => <MappingPage key={route.segments[0] ?? ''} name={decodeURIComponent(route.segments[0] ?? '')} /> }],
+  columns: [{ name: 'status', title: 'columnStatus', meaning: 'columnStatusMeaning', objects: ['task'], useCells: useStatusCells }],
+  pages: [
+    { path: 'changes', icon: 'table', render: (route: { segments: string[] }) => <ChangesPage key={route.segments[0] ?? ''} name={decodeURIComponent(route.segments[0] ?? '')} /> },
+    { path: 'mapping', render: (route: { segments: string[] }) => <MappingPage key={route.segments[0] ?? ''} name={decodeURIComponent(route.segments[0] ?? '')} /> },
+  ],
   settings: () => <JiraSettings />,
   settingsDrawn: ['connections', 'accounts', 'pull_attachments', 'attachments_folder', 'add_people', 'key_property', 'own_board', 'board_folders', 'auto_fetch', 'auto_sync_on_save', 'auto_sync_on_push'],
   // wherever the person is, an auto sync that stops on something says so once (Jira Sync REQ20)

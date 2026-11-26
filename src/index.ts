@@ -47,7 +47,7 @@ import { ask, confirm, readLines } from './prompt.ts';
 import { create as createIssue, parentsFirst, prepareCreate, type CreateOptions, type CreatePlan, type Created } from './create.ts';
 import { heldOf, readState, run, skipOf, writeState, type Done, type Plan } from './pull.ts';
 import { readNeeds, setNeed, startAutoSync, type Need } from './autosync.ts';
-import { apply as applySync, editedHere, journalOf, prepare as prepareSync, sendComment, SyncRefused, taskFor, type SyncDone, type SyncOptions, type SyncPlan } from './sync.ts';
+import { apply as applySync, editedHere, journalOf, prepare as prepareSync, sendComment, SyncRefused, taskFor, changesOf, taskStates, type ChangeRow, type SyncDone, type SyncOptions, type SyncPlan, type TaskSyncState } from './sync.ts';
 import { keyedProperties, keyPropertyRefusal } from './keyed.ts';
 import { tokensFile } from './tokens.ts';
 import { lift, onSite, pause, pauseOf, pauses, refusalOf, type Pause } from './pause.ts';
@@ -85,7 +85,7 @@ export interface JiraApi {
   // a connection that keeps its sprints as something else moved to Backlog sprints (Jira REQ27); a dry run says what it would do
   moveToSprints(name: string, options?: { dryRun?: boolean }): Promise<SprintMovePlan>;
   fetch(name?: string): Promise<Plan[]>;
-  pull(name?: string, options?: { full?: boolean; keepLocal?: boolean }): Promise<Done[]>;
+  pull(name?: string, options?: { full?: boolean; keepLocal?: boolean; only?: ReadonlySet<string> }): Promise<Done[]>;
   // what the Backlog's head says per pull connection: the last fetch's count, or why it failed
   status(): Array<{ connection: string; last_pull: string | null; last_fetch: { at: string; count: number; error?: string } | null }>;
   // The settings page's half (the app entry's routes answer through these, as the commands do)
@@ -140,6 +140,10 @@ export interface JiraApi {
   comment(task: string, text: string): Promise<{ key: string; id: string }>;
   // the tasks edited here since their last pull or sync, the creates cut short, and the syncs cut short, read from the root alone
   syncStatus(name?: string): SyncStatus[];
+  // where each linked task stands with Jira, by its id, for the Jira Sync Status column (Workbench Surfaces REQ8): read from the root and the last fetch, never from Jira
+  taskStatus(): Record<string, TaskSyncState>;
+  // what differs between one board and the project, a row per task or new issue, for its Changes to sync page (Reviewing Jira Changes REQ3)
+  changes(name: string): ChangeRow[];
   // Jira Push: what creating an issue from each task would send, and creating them once none is stopped
   createPlan(tasks: string[], connection: string, options?: CreateOptions): Promise<CreatePlan[]>;
   create(tasks: string[], connection: string, options?: CreateOptions): Promise<Created[]>;
@@ -423,7 +427,13 @@ const entry: CliEntry = {
       return read;
     };
 
-    const fetchOne = async (connection: Connection): Promise<Plan> => (await run(await contextFor(host, connection), false)).plan;
+    // each pull connection's last fetch, until a pull settles it: the tasks Jira changed that a pull would bring in
+    const fetched = new Map<string, Plan>();
+    const fetchOne = async (connection: Connection): Promise<Plan> => {
+      const plan = (await run(await contextFor(host, connection), false)).plan;
+      fetched.set(connection.name, plan);
+      return plan;
+    };
 
     // what matching the Backlog to a board starts from: the board as describe last read it, the Backlog's settings, and the change worked out
     const matching = (name: string, mode: MatchMode) => {
@@ -485,12 +495,22 @@ const entry: CliEntry = {
       connections: () => connections(host),
       fetch: async (name) => {
         const out: Plan[] = [];
-        for (const connection of pullConnections(host, name)) out.push(await fetchOne(connection));
+        for (const connection of pullConnections(host, name)) {
+          const plan = await fetchOne(connection);
+          out.push(plan);
+          host.emit('fetched', { connection: connection.name, count: plan.add.length + plan.change.length + plan.gone.length });
+        }
         return out;
       },
       pull: async (name, options = {}) => {
         const out: Done[] = [];
-        for (const connection of pullConnections(host, name)) out.push((await run(await contextFor(host, connection), true, options)).done!);
+        for (const connection of pullConnections(host, name)) {
+          out.push((await run(await contextFor(host, connection), true, options)).done!);
+          // a pull of some issues leaves the rest of the last fetch standing, those it brought in aside
+          const plan = fetched.get(connection.name);
+          if (!options.only) fetched.delete(connection.name);
+          else if (plan) plan.add = plan.add.filter((added) => !options.only!.has(added.key));
+        }
         return out;
       },
       status: () =>
@@ -906,6 +926,9 @@ const entry: CliEntry = {
         // a task synced needs nobody any more, and its connection answered
         setNeed(host.workspace, done.task, null);
         lift(host, [context.connection.name]);
+        // and what the last fetch said Jira changed on it is level now
+        const plan = fetched.get(context.connection.name);
+        if (plan) plan.change = plan.change.filter((changed) => changed.task !== done.task);
         // the page's two views, the boards and the open ticket, read their state again
         host.emit('changed', { task: done.task });
         return done;
@@ -943,6 +966,8 @@ const entry: CliEntry = {
           };
         });
       },
+      taskStatus: () => taskStates(backlogOf(host), connections(host), (connection) => fetched.get(connection.name), readNeeds(host.workspace)),
+      changes: (name) => changesOf(backlogOf(host), connectionNamed(host, name), fetched.get(name), readNeeds(host.workspace)),
       needs: () => readNeeds(host.workspace),
       taskAt: (file) => {
         const wanted = file.replace(/\\/g, '/').toLowerCase();
@@ -1452,13 +1477,15 @@ const entry: CliEntry = {
         .option('--dry-run', 'show what it would do and write nothing (a fetch)')
         .option('--full', 'read the whole scope, not only what changed since the last pull')
         .option('--keep-local', 'leave the mapped fields edited in the root as the root has them')
+        .option('--only <keys>', 'bring in only these issues, by key, comma-separated, and leave the rest of what changed for the next pull')
         .option('--json', 'print as JSON')
         .description("bring a connection's issues into the Backlog: tasks, and their comments as threads signed by the people who wrote them")
         .action(
-          action(async (name: string | undefined, options: { dryRun?: boolean; full?: boolean; keepLocal?: boolean; json?: boolean }) => {
+          action(async (name: string | undefined, options: { dryRun?: boolean; full?: boolean; keepLocal?: boolean; only?: string; json?: boolean }) => {
             const out: Array<Plan | Done> = [];
+            const only = options.only === undefined ? undefined : new Set(options.only.split(',').map((key) => key.trim().toUpperCase()).filter(Boolean));
             for (const connection of pullConnections(host, name)) {
-              const result = await run(await contextFor(host, connection), options.dryRun !== true, { full: options.full === true, keepLocal: options.keepLocal === true });
+              const result = await run(await contextFor(host, connection), options.dryRun !== true, { full: options.full === true, keepLocal: options.keepLocal === true, ...(only ? { only } : {}) });
               out.push(result.done ?? result.plan);
             }
             if (options.json) return json(out);

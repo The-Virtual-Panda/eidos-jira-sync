@@ -574,3 +574,59 @@ test('Jira Pull REQ19: a report reads what a sprint held at its start and at its
   assert.deepEqual(ids(report.result!.carried), ['K-carried']);
   assert.equal(report.result!.carried_to, 'Six');
 });
+
+test('Reviewing Jira Changes REQ3, Workbench Surfaces REQ8: each difference between a board and the project is one row that goes its way, and the status column reads the same', async () => {
+  const { changesOf, taskStates } = await import('../src/sync.ts');
+  const { normalise, short } = await import('../src/pull.ts');
+  const held = (key: string, title: string, extra: Record<string, unknown> = {}) => ({
+    'jira-sync': { id: key, site: 'acme.atlassian.net', key, digest: { title: short(normalise(title)) }, ...extra },
+  });
+  const task = (id: string, title: string, properties: Record<string, unknown>) => ({ id, name: id.toLowerCase(), title, properties, updated: '2026-11-20T10:00:00Z' });
+  const tasks = [
+    task('T-1', 'Level', held('ACME-1', 'Level')),
+    task('T-2', 'Edited here', held('ACME-2', 'Before the edit')),
+    task('T-3', 'Changed there', held('ACME-3', 'Changed there')),
+    task('T-4', 'Edited on both sides', held('ACME-4', 'Before the edit')),
+    task('T-5', 'Stopped on', held('ACME-5', 'Stopped on')),
+    task('T-6', 'Never linked', {}),
+    task('T-7', 'Kept off Jira', held('ACME-7', 'Kept off Jira', { skip: true })),
+    task('T-8', 'Create cut short', { 'jira-sync': { pending: 'abc', connection: 'acme' } }),
+    task('T-9', 'Another site', { 'jira-sync': { id: 'X-9', site: 'other.atlassian.net', key: 'X-9', digest: {} } }),
+    task('T-10', 'Edited here, moved there', held('ACME-10', 'Before the edit')),
+  ];
+  const backlog = { tasks: () => tasks, settings: () => ({ boards: [], statuses: [], columns: [], types: [], properties: [] }) };
+  const connection = { name: 'acme', site: 'acme.atlassian.net', mapping: { fields: [{ jira: 'summary', eidos: 'title' }] } } as unknown as Connection;
+  const fetched = {
+    add: [{ key: 'ACME-11', title: 'New in Jira', at: '2026-11-21T09:00:00Z' }],
+    change: [
+      { key: 'ACME-3', task: 'T-3', fields: ['title'], jira: ['title'], at: '2026-11-22T09:00:00Z' },
+      { key: 'ACME-4', task: 'T-4', fields: ['title'], jira: ['title'], at: '2026-11-22T09:00:00Z' },
+      { key: 'ACME-10', task: 'T-10', fields: ['title', 'status'], jira: ['status'], at: '2026-11-22T09:00:00Z' },
+    ],
+  };
+  const needs = [{ task: 'T-5', key: 'ACME-5', reason: 'a status to choose' }];
+  const rows = changesOf(backlog as never, connection, fetched, needs);
+  assert.deepEqual(
+    rows.map((row) => [row.task, row.key, row.way, row.fields]),
+    [
+      ['T-2', 'ACME-2', 'to-jira', ['title']],
+      ['T-4', 'ACME-4', 'conflict', ['title']],
+      ['T-10', 'ACME-10', 'both', ['title', 'status']],
+      ['T-3', 'ACME-3', 'from-jira', ['title']],
+      ['T-5', 'ACME-5', 'needs', []],
+      ['T-8', '', 'needs', []],
+      [null, 'ACME-11', 'new', []],
+    ],
+  );
+  assert.equal(rows.find((row) => row.task === 'T-3')?.at, '2026-11-22T09:00:00Z', 'what came from Jira is dated by Jira');
+  assert.equal(rows.find((row) => row.task === 'T-5')?.reason, 'a status to choose');
+  assert.deepEqual(taskStates(backlog as never, [connection], () => fetched, needs), {
+    'T-1': 'synced',
+    'T-2': 'to-jira',
+    'T-3': 'from-jira',
+    'T-4': 'conflict',
+    'T-5': 'needs',
+    'T-8': 'needs',
+    'T-10': 'both',
+  });
+});
